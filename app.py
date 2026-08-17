@@ -17,8 +17,8 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_PATH = os.path.join(BASE_DIR, "model (1)(1).pkl")
-VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer(1).pkl")
+MODEL_PATH = os.path.join(BASE_DIR, "model (1).pkl")
+VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
 
 # ------------------------------------------------------------
 # LOAD MODEL

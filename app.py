@@ -1,346 +1,1796 @@
-import os
+from flask import Flask, request, render_template_string, jsonify
 import pickle
-import warnings
-from flask import Flask, request, jsonify, render_template_string
+import os
 
-warnings.filterwarnings("ignore")
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "model (1).pkl")
-VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
-
-with open(MODEL_PATH, "rb") as f:
-    model = pickle.load(f)
-
-with open(VECTORIZER_PATH, "rb") as f:
-    vectorizer = pickle.load(f)
+# ============================================================
+# SENTIMENT ANALYSIS - FLASK APPLICATION
+# Model     : Multinomial Naive Bayes
+# Vectorizer: TF-IDF
+# ============================================================
 
 app = Flask(__name__)
 
-HTML = r"""
+# ------------------------------------------------------------
+# FILE PATHS
+# Keep app.py, model and vectorizer in the same folder
+# ------------------------------------------------------------
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_PATH = os.path.join(BASE_DIR, "model (1)(1).pkl")
+VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer(1).pkl")
+
+# ------------------------------------------------------------
+# LOAD MODEL
+# ------------------------------------------------------------
+
+try:
+    with open(MODEL_PATH, "rb") as model_file:
+        model = pickle.load(model_file)
+
+    with open(VECTORIZER_PATH, "rb") as vectorizer_file:
+        vectorizer = pickle.load(vectorizer_file)
+
+    MODEL_STATUS = True
+
+except Exception as e:
+    model = None
+    vectorizer = None
+    MODEL_STATUS = False
+    MODEL_ERROR = str(e)
+
+
+# ------------------------------------------------------------
+# SENTIMENT HELPER
+# ------------------------------------------------------------
+
+def get_sentiment_details(prediction, confidence=0):
+    """
+    Converts model prediction into UI-friendly information.
+    Works with common labels such as:
+    Positive, Negative, Neutral
+    """
+
+    label = str(prediction).strip()
+
+    normalized = label.lower()
+
+    if "positive" in normalized:
+        return {
+            "label": "Positive",
+            "emoji": "😊",
+            "icon": "fa-face-smile",
+            "class": "positive",
+            "description": "This text expresses a positive sentiment.",
+            "color": "positive"
+        }
+
+    elif "negative" in normalized:
+        return {
+            "label": "Negative",
+            "emoji": "😞",
+            "icon": "fa-face-frown",
+            "class": "negative",
+            "description": "This text expresses a negative sentiment.",
+            "color": "negative"
+        }
+
+    elif "neutral" in normalized:
+        return {
+            "label": "Neutral",
+            "emoji": "😐",
+            "icon": "fa-face-meh",
+            "class": "neutral",
+            "description": "This text expresses a neutral sentiment.",
+            "color": "neutral"
+        }
+
+    # Generic fallback
+    return {
+        "label": label.title(),
+        "emoji": "🔍",
+        "icon": "fa-magnifying-glass-chart",
+        "class": "neutral",
+        "description": "The model has classified your text.",
+        "color": "neutral"
+    }
+
+
+# ------------------------------------------------------------
+# MAIN ROUTE
+# ------------------------------------------------------------
+
+@app.route("/", methods=["GET", "POST"])
+def home():
+
+    text = ""
+    result = None
+    confidence = None
+    error = None
+
+    if request.method == "POST":
+
+        text = request.form.get("text", "").strip()
+
+        if not text:
+            error = "Please enter some text before analyzing."
+
+        elif not MODEL_STATUS:
+            error = "Model files could not be loaded. Please check the .pkl files."
+
+        else:
+            try:
+                # Transform text using your saved TF-IDF vectorizer
+                transformed_text = vectorizer.transform([text])
+
+                # Prediction
+                prediction = model.predict(transformed_text)[0]
+
+                # Confidence
+                try:
+                    probabilities = model.predict_proba(transformed_text)[0]
+                    confidence = round(float(max(probabilities)) * 100, 2)
+                except Exception:
+                    confidence = None
+
+                result = get_sentiment_details(
+                    prediction,
+                    confidence if confidence else 0
+                )
+
+            except Exception as e:
+                error = f"Prediction error: {str(e)}"
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        text=text,
+        result=result,
+        confidence=confidence,
+        error=error,
+        model_status=MODEL_STATUS
+    )
+
+
+# ------------------------------------------------------------
+# API ROUTE
+# Useful if you want to connect another frontend later
+# ------------------------------------------------------------
+
+@app.route("/api/predict", methods=["POST"])
+def api_predict():
+
+    if not MODEL_STATUS:
+        return jsonify({
+            "success": False,
+            "error": "Model files could not be loaded."
+        }), 500
+
+    data = request.get_json(silent=True) or {}
+
+    text = str(data.get("text", "")).strip()
+
+    if not text:
+        return jsonify({
+            "success": False,
+            "error": "Text is required."
+        }), 400
+
+    try:
+        transformed_text = vectorizer.transform([text])
+        prediction = model.predict(transformed_text)[0]
+
+        confidence = None
+
+        try:
+            probabilities = model.predict_proba(transformed_text)[0]
+            confidence = round(float(max(probabilities)) * 100, 2)
+        except Exception:
+            pass
+
+        details = get_sentiment_details(prediction, confidence or 0)
+
+        return jsonify({
+            "success": True,
+            "text": text,
+            "sentiment": details["label"],
+            "confidence": confidence,
+            "emoji": details["emoji"]
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ============================================================
+# PREMIUM FRONTEND
+# ============================================================
+
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sentiment Intelligence Dashboard</title>
 
+<title>Sentix AI | Sentiment Intelligence</title>
+
+<!-- Google Font -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Font Awesome -->
+<link rel="stylesheet"
+href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 
 <style>
-:root{
-    --bg:#080b16;
-    --card:rgba(18,24,43,.78);
-    --card2:rgba(24,31,54,.92);
-    --text:#f7f8ff;
-    --muted:#aab3ca;
-    --border:rgba(255,255,255,.10);
-    --primary:#7c5cff;
-    --secondary:#00d4ff;
-    --accent:#ff4ecd;
-    --success:#20e3a2;
-    --danger:#ff5d7a;
-    --shadow:0 24px 70px rgba(0,0,0,.35);
+
+:root {
+
+    --bg: #070b14;
+    --card: rgba(17, 24, 39, 0.72);
+    --card-solid: #111827;
+
+    --text: #f8fafc;
+    --muted: #94a3b8;
+
+    --primary: #8b5cf6;
+    --primary-2: #6366f1;
+
+    --border: rgba(255,255,255,0.09);
+
+    --success: #22c55e;
+    --danger: #ef4444;
+    --warning: #f59e0b;
+
+    --shadow:
+        0 25px 80px rgba(0,0,0,0.35);
 }
-*{box-sizing:border-box}
-body{
-    margin:0; color:var(--text);
-    font-family:Inter,system-ui,sans-serif;
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+
+    font-family: "DM Sans", sans-serif;
+
     background:
-      radial-gradient(circle at 10% 10%,rgba(124,92,255,.24),transparent 30%),
-      radial-gradient(circle at 90% 20%,rgba(0,212,255,.18),transparent 28%),
-      radial-gradient(circle at 50% 100%,rgba(255,78,205,.13),transparent 30%),
-      var(--bg);
-    min-height:100vh;
-    overflow-x:hidden;
-}
-body:before{
-    content:"";position:fixed;inset:0;pointer-events:none;opacity:.22;
-    background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
-                     linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
-    background-size:42px 42px;
-}
-.container{width:min(1180px,92%);margin:auto}
-.nav{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:26px 0; position:relative;z-index:2
-}
-.brand{display:flex;gap:12px;align-items:center;font-family:"Space Grotesk";font-weight:700;font-size:20px}
-.logo{
-    width:42px;height:42px;border-radius:14px;
-    display:grid;place-items:center;
-    background:linear-gradient(135deg,var(--primary),var(--accent),var(--secondary));
-    box-shadow:0 0 32px rgba(124,92,255,.45);
-}
-.theme-wrap{display:flex;gap:8px;align-items:center}
-.theme-btn{
-    border:1px solid var(--border);background:rgba(255,255,255,.06);
-    color:var(--text);border-radius:12px;padding:9px 12px;cursor:pointer;
-    transition:.25s
-}
-.theme-btn:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.25)}
-.hero{padding:38px 0 25px;position:relative}
-.badge{
-    display:inline-flex;padding:8px 12px;border-radius:999px;
-    background:rgba(32,227,162,.10);border:1px solid rgba(32,227,162,.25);
-    color:var(--success);font-size:12px;font-weight:700;letter-spacing:.5px
-}
-h1{
-    font-family:"Space Grotesk";font-size:clamp(38px,6vw,70px);
-    line-height:1.02;margin:18px 0 14px;max-width:850px;
-    background:linear-gradient(90deg,#fff,var(--secondary),#fff,var(--accent));
-    background-size:250% auto;-webkit-background-clip:text;background-clip:text;color:transparent;
-    animation:shine 7s linear infinite
-}
-@keyframes shine{to{background-position:250% center}}
-.hero p{color:var(--muted);max-width:720px;font-size:16px;line-height:1.8}
-.grid{display:grid;grid-template-columns:1.08fr .92fr;gap:22px;margin:22px 0}
-.card{
-    background:linear-gradient(145deg,rgba(255,255,255,.07),rgba(255,255,255,.025));
-    border:1px solid var(--border);border-radius:24px;padding:25px;
-    box-shadow:var(--shadow);backdrop-filter:blur(18px);
-    animation:rise .7s ease both
-}
-@keyframes rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
-.card h2{font-family:"Space Grotesk";margin:0 0 8px;font-size:21px}
-.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
-textarea{
-    width:100%;min-height:205px;resize:vertical;padding:18px;
-    border-radius:18px;border:1px solid var(--border);
-    background:rgba(4,7,16,.62);color:var(--text);
-    outline:none;font:500 15px/1.7 Inter;transition:.25s
-}
-textarea:focus{border-color:var(--secondary);box-shadow:0 0 0 4px rgba(0,212,255,.08)}
-.controls{display:flex;gap:12px;flex-wrap:wrap;margin-top:15px}
-button.primary{
-    border:0;padding:13px 19px;border-radius:14px;color:white;
-    background:linear-gradient(135deg,var(--primary),var(--accent));
-    font-weight:800;cursor:pointer;box-shadow:0 10px 28px rgba(124,92,255,.25);
-    transition:.25s
-}
-button.primary:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(124,92,255,.35)}
-button.secondary{
-    border:1px solid var(--border);padding:13px 19px;border-radius:14px;
-    background:rgba(255,255,255,.06);color:var(--text);font-weight:700;cursor:pointer
-}
-.result{
-    min-height:205px;display:grid;place-items:center;text-align:center;
-    border-radius:18px;background:rgba(4,7,16,.42);border:1px solid var(--border)
-}
-.result .emoji{font-size:48px;filter:drop-shadow(0 0 18px rgba(255,255,255,.18))}
-.label{font-family:"Space Grotesk";font-size:30px;font-weight:800;margin-top:6px}
-.conf{color:var(--muted);margin-top:7px}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
-.stat{padding:17px;border:1px solid var(--border);border-radius:18px;background:rgba(255,255,255,.04)}
-.stat b{font-size:24px;font-family:"Space Grotesk"}
-.stat span{display:block;color:var(--muted);font-size:12px;margin-top:5px}
-.chart-card{margin:22px 0}
-.chart-box{height:330px;position:relative}
-footer{text-align:center;color:var(--muted);font-size:12px;padding:30px 0 45px}
-.loader{
-    width:23px;height:23px;border:3px solid rgba(255,255,255,.18);
-    border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite
-}
-@keyframes spin{to{transform:rotate(360deg)}}
-.themes{display:none;position:absolute;right:0;top:75px;background:var(--card2);
-border:1px solid var(--border);border-radius:18px;padding:10px;box-shadow:var(--shadow);z-index:10}
-.themes.open{display:flex;gap:8px}
-.dot{width:24px;height:24px;border-radius:50%;border:2px solid rgba(255,255,255,.5);cursor:pointer}
-@media(max-width:850px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr}}
-</style>
-</head>
+        radial-gradient(
+            circle at 10% 10%,
+            rgba(139,92,246,0.18),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 90% 20%,
+            rgba(59,130,246,0.14),
+            transparent 30%
+        ),
+        var(--bg);
 
-<body>
-<div class="container">
-<nav class="nav">
-    <div class="brand"><div class="logo">AI</div> Sentiment Intelligence</div>
-    <div style="position:relative">
-        <div class="theme-wrap">
-            <button class="theme-btn" onclick="toggleThemes()">🎨 Theme</button>
-        </div>
-        <div class="themes" id="themes">
-            <div class="dot" title="Aurora" style="background:linear-gradient(135deg,#7c5cff,#00d4ff)" onclick="theme('aurora')"></div>
-            <div class="dot" title="Sunset" style="background:linear-gradient(135deg,#ff7a18,#ff3d81)" onclick="theme('sunset')"></div>
-            <div class="dot" title="Ocean" style="background:linear-gradient(135deg,#00c6ff,#0072ff)" onclick="theme('ocean')"></div>
-            <div class="dot" title="Emerald" style="background:linear-gradient(135deg,#00b09b,#96c93d)" onclick="theme('emerald')"></div>
-            <div class="dot" title="Royal" style="background:linear-gradient(135deg,#8e2de2,#4a00e0)" onclick="theme('royal')"></div>
-        </div>
-    </div>
-</nav>
+    color: var(--text);
 
-<section class="hero">
-    <span class="badge">● MODEL ONLINE · MULTINOMIAL NAIVE BAYES</span>
-    <h1>Turn text into<br>clear sentiment insights.</h1>
-    <p>Analyze customer reviews, feedback and comments with your trained NLP model. Get an instant sentiment prediction, confidence score and professional visual analysis.</p>
-</section>
+    min-height: 100vh;
 
-<section class="grid">
-    <div class="card">
-        <h2>📝 Text Analyzer</h2>
-        <div class="sub">Enter a review or any English text.</div>
-        <textarea id="text" placeholder="Example: The product quality is excellent and I really enjoyed using it..."></textarea>
-        <div class="controls">
-            <button class="primary" onclick="analyze()">Analyze Sentiment</button>
-            <button class="secondary" onclick="clearAll()">Clear</button>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>📊 Prediction</h2>
-        <div class="sub">Live result from your model + TF-IDF vectorizer.</div>
-        <div class="result" id="result">
-            <div>
-                <div class="emoji">🔮</div>
-                <div class="label">Waiting for text</div>
-                <div class="conf">Your prediction will appear here</div>
-            </div>
-        </div>
-        <div class="stats">
-            <div class="stat"><b id="sentimentStat">—</b><span>SENTIMENT</span></div>
-            <div class="stat"><b id="confidenceStat">—</b><span>CONFIDENCE</span></div>
-            <div class="stat"><b id="wordsStat">0</b><span>WORDS</span></div>
-        </div>
-    </div>
-</section>
-
-<div class="card chart-card">
-    <h2>📈 Probability Analysis</h2>
-    <div class="sub">Model probability distribution for the latest prediction.</div>
-    <div class="chart-box"><canvas id="probChart"></canvas></div>
-</div>
-
-<footer>Built with Flask · TF-IDF · Multinomial Naive Bayes · Chart.js</footer>
-</div>
-
-<script>
-let chart = null;
-
-const themes = {
-  aurora:{primary:"#7c5cff",secondary:"#00d4ff",accent:"#ff4ecd"},
-  sunset:{primary:"#ff7a18",secondary:"#ff3d81",accent:"#ffd166"},
-  ocean:{primary:"#00c6ff",secondary:"#0072ff",accent:"#00f5d4"},
-  emerald:{primary:"#00b09b",secondary:"#96c93d",accent:"#00e5a8"},
-  royal:{primary:"#8e2de2",secondary:"#4a00e0",accent:"#c77dff"}
-};
-
-function theme(name){
-    const t=themes[name];
-    document.documentElement.style.setProperty("--primary",t.primary);
-    document.documentElement.style.setProperty("--secondary",t.secondary);
-    document.documentElement.style.setProperty("--accent",t.accent);
-    localStorage.setItem("sentiment-theme",name);
-    document.getElementById("themes").classList.remove("open");
-}
-function toggleThemes(){document.getElementById("themes").classList.toggle("open")}
-const saved=localStorage.getItem("sentiment-theme"); if(saved) theme(saved);
-
-function clearAll(){
-    document.getElementById("text").value="";
-    document.getElementById("wordsStat").textContent="0";
-    document.getElementById("sentimentStat").textContent="—";
-    document.getElementById("confidenceStat").textContent="—";
-    document.getElementById("result").innerHTML='<div><div class="emoji">🔮</div><div class="label">Waiting for text</div><div class="conf">Your prediction will appear here</div></div>';
-    if(chart){chart.destroy();chart=null;}
+    overflow-x: hidden;
 }
 
-async function analyze(){
-    const text=document.getElementById("text").value.trim();
-    if(!text){alert("Please enter some text first.");return;}
 
-    const result=document.getElementById("result");
-    result.innerHTML='<div class="loader"></div>';
+/* =========================================================
+   BACKGROUND EFFECTS
+========================================================= */
 
-    try{
-        const response=await fetch("/predict",{
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({text})
-        });
-        const data=await response.json();
-        if(!response.ok) throw new Error(data.error || "Prediction failed");
+.bg-orb {
 
-        const positive=data.sentiment.toLowerCase()==="positive";
-        result.innerHTML=`<div>
-            <div class="emoji">${positive?"😊":"😞"}</div>
-            <div class="label">${data.sentiment}</div>
-            <div class="conf">${data.confidence.toFixed(2)}% confidence</div>
-        </div>`;
+    position: fixed;
 
-        document.getElementById("sentimentStat").textContent=data.sentiment;
-        document.getElementById("confidenceStat").textContent=data.confidence.toFixed(1)+"%";
-        document.getElementById("wordsStat").textContent=text.split(/\s+/).filter(Boolean).length;
+    width: 350px;
+    height: 350px;
 
-        const labels=Object.keys(data.probabilities);
-        const values=Object.values(data.probabilities);
+    border-radius: 50%;
 
-        if(chart) chart.destroy();
-        chart=new Chart(document.getElementById("probChart"),{
-            type:"bar",
-            data:{
-                labels:labels.map(x=>x.toUpperCase()),
-                datasets:[{
-                    label:"Probability %",
-                    data:values,
-                    borderRadius:12,
-                    borderWidth:1
-                }]
-            },
-            options:{
-                responsive:true,maintainAspectRatio:false,
-                plugins:{legend:{display:false}},
-                scales:{
-                    x:{grid:{display:false},ticks:{color:"#aab3ca"}},
-                    y:{beginAtZero:true,max:100,grid:{color:"rgba(255,255,255,.07)"},ticks:{color:"#aab3ca",callback:v=>v+"%"}}
-                }
-            }
-        });
-    }catch(err){
-        result.innerHTML='<div><div class="emoji">⚠️</div><div class="label">Prediction Error</div><div class="conf">'+err.message+'</div></div>';
+    filter: blur(90px);
+
+    opacity: 0.15;
+
+    pointer-events: none;
+
+    z-index: -1;
+
+    animation: floatOrb 10s ease-in-out infinite;
+}
+
+.orb-one {
+
+    background: #8b5cf6;
+
+    top: 5%;
+    left: -100px;
+}
+
+.orb-two {
+
+    background: #06b6d4;
+
+    bottom: 5%;
+    right: -100px;
+
+    animation-delay: -4s;
+}
+
+@keyframes floatOrb {
+
+    0%,100% {
+        transform: translate(0,0);
+    }
+
+    50% {
+        transform: translate(40px,-30px);
     }
 }
+
+
+/* =========================================================
+   NAVBAR
+========================================================= */
+
+.navbar {
+
+    width: 100%;
+
+    padding: 22px 6%;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    border-bottom: 1px solid var(--border);
+
+    background: rgba(7,11,20,0.65);
+
+    backdrop-filter: blur(20px);
+
+    position: sticky;
+
+    top: 0;
+
+    z-index: 100;
+}
+
+.logo {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    font-family: "Outfit";
+
+    font-weight: 800;
+
+    font-size: 22px;
+}
+
+.logo-icon {
+
+    width: 42px;
+    height: 42px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 13px;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--primary),
+            var(--primary-2)
+        );
+
+    box-shadow:
+        0 8px 30px rgba(139,92,246,0.35);
+}
+
+.logo span {
+
+    background:
+        linear-gradient(
+            90deg,
+            #fff,
+            #c4b5fd
+        );
+
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.nav-actions {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+}
+
+
+/* =========================================================
+   THEME BUTTONS
+========================================================= */
+
+.theme-selector {
+
+    display: flex;
+
+    gap: 6px;
+
+    padding: 5px;
+
+    background: rgba(255,255,255,0.05);
+
+    border: 1px solid var(--border);
+
+    border-radius: 12px;
+}
+
+.theme-btn {
+
+    width: 34px;
+    height: 30px;
+
+    border: none;
+
+    border-radius: 8px;
+
+    cursor: pointer;
+
+    transition: 0.25s;
+
+    color: white;
+
+    font-size: 12px;
+}
+
+.theme-btn:hover {
+    transform: translateY(-2px);
+}
+
+.theme-purple {
+    background: linear-gradient(135deg,#8b5cf6,#6366f1);
+}
+
+.theme-ocean {
+    background: linear-gradient(135deg,#06b6d4,#2563eb);
+}
+
+.theme-emerald {
+    background: linear-gradient(135deg,#10b981,#059669);
+}
+
+.theme-sunset {
+    background: linear-gradient(135deg,#f97316,#ec4899);
+}
+
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero {
+
+    width: min(1150px, 92%);
+
+    margin: 75px auto 40px;
+
+    text-align: center;
+}
+
+.badge {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    padding: 8px 15px;
+
+    border: 1px solid rgba(139,92,246,0.25);
+
+    border-radius: 100px;
+
+    background: rgba(139,92,246,0.08);
+
+    color: #c4b5fd;
+
+    font-size: 13px;
+
+    font-weight: 600;
+
+    margin-bottom: 22px;
+}
+
+.badge i {
+    color: #a78bfa;
+}
+
+.hero h1 {
+
+    font-family: "Outfit";
+
+    font-size: clamp(42px, 6vw, 72px);
+
+    line-height: 1.05;
+
+    letter-spacing: -2px;
+
+    font-weight: 800;
+
+    margin-bottom: 20px;
+}
+
+.gradient-text {
+
+    background:
+        linear-gradient(
+            90deg,
+            #a78bfa,
+            #60a5fa,
+            #22d3ee
+        );
+
+    -webkit-background-clip: text;
+
+    -webkit-text-fill-color: transparent;
+}
+
+.hero p {
+
+    max-width: 650px;
+
+    margin: auto;
+
+    color: var(--muted);
+
+    font-size: 17px;
+
+    line-height: 1.7;
+}
+
+
+/* =========================================================
+   MAIN CARD
+========================================================= */
+
+.container {
+
+    width: min(1000px, 92%);
+
+    margin: 0 auto 80px;
+}
+
+.main-card {
+
+    position: relative;
+
+    background: var(--card);
+
+    border: 1px solid var(--border);
+
+    border-radius: 28px;
+
+    padding: 32px;
+
+    backdrop-filter: blur(25px);
+
+    box-shadow: var(--shadow);
+
+    overflow: hidden;
+}
+
+.main-card::before {
+
+    content: "";
+
+    position: absolute;
+
+    width: 300px;
+    height: 300px;
+
+    border-radius: 50%;
+
+    background: var(--primary);
+
+    filter: blur(120px);
+
+    opacity: 0.06;
+
+    top: -160px;
+    right: -100px;
+}
+
+
+/* =========================================================
+   CARD HEADER
+========================================================= */
+
+.card-header {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 20px;
+
+    margin-bottom: 25px;
+}
+
+.card-title {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 13px;
+}
+
+.card-title-icon {
+
+    width: 45px;
+    height: 45px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 14px;
+
+    background:
+        rgba(139,92,246,0.12);
+
+    color: #a78bfa;
+}
+
+.card-title h2 {
+
+    font-family: "Outfit";
+
+    font-size: 20px;
+}
+
+.card-title p {
+
+    color: var(--muted);
+
+    font-size: 13px;
+
+    margin-top: 3px;
+}
+
+.status {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+
+    padding: 7px 12px;
+
+    border-radius: 100px;
+
+    background: rgba(34,197,94,0.08);
+
+    border: 1px solid rgba(34,197,94,0.15);
+
+    color: #86efac;
+
+    font-size: 12px;
+
+    font-weight: 600;
+}
+
+.status-dot {
+
+    width: 7px;
+    height: 7px;
+
+    border-radius: 50%;
+
+    background: #22c55e;
+
+    box-shadow: 0 0 10px #22c55e;
+
+    animation: pulse 1.8s infinite;
+}
+
+@keyframes pulse {
+
+    0%,100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: .4;
+    }
+}
+
+
+/* =========================================================
+   TEXT AREA
+========================================================= */
+
+.input-wrapper {
+
+    position: relative;
+}
+
+textarea {
+
+    width: 100%;
+
+    min-height: 190px;
+
+    resize: vertical;
+
+    border: 1px solid var(--border);
+
+    border-radius: 20px;
+
+    background: rgba(0,0,0,0.2);
+
+    color: var(--text);
+
+    padding: 22px;
+
+    font-family: "DM Sans";
+
+    font-size: 16px;
+
+    line-height: 1.7;
+
+    outline: none;
+
+    transition: 0.3s;
+}
+
+textarea::placeholder {
+    color: #64748b;
+}
+
+textarea:focus {
+
+    border-color: rgba(139,92,246,0.6);
+
+    box-shadow:
+        0 0 0 4px rgba(139,92,246,0.08);
+}
+
+.counter {
+
+    position: absolute;
+
+    bottom: 14px;
+    right: 17px;
+
+    color: #64748b;
+
+    font-size: 12px;
+}
+
+
+/* =========================================================
+   SAMPLE TEXT
+========================================================= */
+
+.samples {
+
+    display: flex;
+
+    flex-wrap: wrap;
+
+    gap: 8px;
+
+    margin-top: 15px;
+}
+
+.sample {
+
+    border: 1px solid var(--border);
+
+    background: rgba(255,255,255,0.03);
+
+    color: #cbd5e1;
+
+    border-radius: 10px;
+
+    padding: 8px 12px;
+
+    font-size: 12px;
+
+    cursor: pointer;
+
+    transition: .25s;
+}
+
+.sample:hover {
+
+    border-color: rgba(139,92,246,.4);
+
+    background: rgba(139,92,246,.08);
+
+    transform: translateY(-1px);
+}
+
+
+/* =========================================================
+   BUTTON
+========================================================= */
+
+.analyze-btn {
+
+    width: 100%;
+
+    margin-top: 22px;
+
+    border: none;
+
+    border-radius: 16px;
+
+    padding: 17px;
+
+    font-size: 15px;
+
+    font-weight: 700;
+
+    color: white;
+
+    cursor: pointer;
+
+    font-family: "DM Sans";
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--primary),
+            var(--primary-2)
+        );
+
+    box-shadow:
+        0 12px 35px rgba(99,102,241,0.25);
+
+    transition: .3s;
+
+    position: relative;
+
+    overflow: hidden;
+}
+
+.analyze-btn:hover {
+
+    transform: translateY(-3px);
+
+    box-shadow:
+        0 18px 45px rgba(99,102,241,0.38);
+}
+
+.analyze-btn:active {
+    transform: scale(.99);
+}
+
+.analyze-btn i {
+    margin-right: 8px;
+}
+
+
+/* =========================================================
+   ERROR
+========================================================= */
+
+.error {
+
+    margin-top: 20px;
+
+    padding: 15px 17px;
+
+    border-radius: 14px;
+
+    background: rgba(239,68,68,0.08);
+
+    border: 1px solid rgba(239,68,68,0.2);
+
+    color: #fca5a5;
+
+    font-size: 14px;
+}
+
+
+/* =========================================================
+   RESULT
+========================================================= */
+
+.result {
+
+    margin-top: 28px;
+
+    border-radius: 22px;
+
+    border: 1px solid var(--border);
+
+    padding: 25px;
+
+    background: rgba(255,255,255,0.025);
+
+    animation: resultIn .5s ease;
+}
+
+@keyframes resultIn {
+
+    from {
+        opacity: 0;
+        transform: translateY(15px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.result-header {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    margin-bottom: 20px;
+}
+
+.result-label {
+
+    color: var(--muted);
+
+    font-size: 12px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 1px;
+}
+
+.sentiment-box {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 17px;
+}
+
+.sentiment-icon {
+
+    width: 64px;
+    height: 64px;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 20px;
+
+    font-size: 29px;
+}
+
+.sentiment-icon.positive {
+
+    background: rgba(34,197,94,0.1);
+
+    border: 1px solid rgba(34,197,94,0.2);
+}
+
+.sentiment-icon.negative {
+
+    background: rgba(239,68,68,0.1);
+
+    border: 1px solid rgba(239,68,68,0.2);
+}
+
+.sentiment-icon.neutral {
+
+    background: rgba(245,158,11,0.1);
+
+    border: 1px solid rgba(245,158,11,0.2);
+}
+
+.sentiment-name {
+
+    font-family: "Outfit";
+
+    font-size: 27px;
+
+    font-weight: 800;
+}
+
+.sentiment-name.positive {
+    color: #4ade80;
+}
+
+.sentiment-name.negative {
+    color: #f87171;
+}
+
+.sentiment-name.neutral {
+    color: #fbbf24;
+}
+
+.description {
+
+    color: var(--muted);
+
+    margin-top: 4px;
+
+    font-size: 13px;
+}
+
+
+/* =========================================================
+   CONFIDENCE
+========================================================= */
+
+.confidence {
+
+    margin-top: 25px;
+}
+
+.confidence-top {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    color: var(--muted);
+
+    font-size: 13px;
+
+    margin-bottom: 9px;
+}
+
+.confidence-value {
+
+    color: white;
+
+    font-weight: 700;
+}
+
+.progress {
+
+    height: 9px;
+
+    background: rgba(255,255,255,.07);
+
+    border-radius: 100px;
+
+    overflow: hidden;
+}
+
+.progress-bar {
+
+    height: 100%;
+
+    border-radius: inherit;
+
+    background:
+        linear-gradient(
+            90deg,
+            var(--primary),
+            #22d3ee
+        );
+
+    width: {{ confidence or 0 }}%;
+
+    transition: width 1s ease;
+}
+
+
+/* =========================================================
+   INFO CARDS
+========================================================= */
+
+.info-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(3, 1fr);
+
+    gap: 14px;
+
+    margin-top: 18px;
+}
+
+.info-card {
+
+    padding: 18px;
+
+    border-radius: 17px;
+
+    border: 1px solid var(--border);
+
+    background: rgba(255,255,255,.025);
+}
+
+.info-card i {
+
+    color: #a78bfa;
+
+    margin-bottom: 12px;
+
+    font-size: 18px;
+}
+
+.info-card h3 {
+
+    font-family: "Outfit";
+
+    font-size: 14px;
+
+    margin-bottom: 4px;
+}
+
+.info-card p {
+
+    color: var(--muted);
+
+    font-size: 12px;
+
+    line-height: 1.5;
+}
+
+
+/* =========================================================
+   FOOTER
+========================================================= */
+
+footer {
+
+    text-align: center;
+
+    padding: 30px;
+
+    color: #64748b;
+
+    font-size: 12px;
+}
+
+footer span {
+    color: #a78bfa;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:700px) {
+
+    .navbar {
+        padding: 18px 4%;
+    }
+
+    .hero {
+        margin-top: 50px;
+    }
+
+    .hero h1 {
+        letter-spacing: -1px;
+    }
+
+    .main-card {
+        padding: 20px;
+
+        border-radius: 22px;
+    }
+
+    .card-header {
+        align-items: flex-start;
+    }
+
+    .status {
+        display: none;
+    }
+
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .theme-selector {
+        gap: 3px;
+    }
+
+    .theme-btn {
+        width: 30px;
+    }
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div class="bg-orb orb-one"></div>
+<div class="bg-orb orb-two"></div>
+
+
+<!-- =====================================================
+     NAVBAR
+===================================================== -->
+
+<nav class="navbar">
+
+    <div class="logo">
+
+        <div class="logo-icon">
+            <i class="fa-solid fa-brain"></i>
+        </div>
+
+        <span>Sentix AI</span>
+
+    </div>
+
+
+    <div class="nav-actions">
+
+        <div class="theme-selector">
+
+            <button
+                class="theme-btn theme-purple"
+                onclick="setTheme('purple')"
+                title="Purple Theme">
+            </button>
+
+            <button
+                class="theme-btn theme-ocean"
+                onclick="setTheme('ocean')"
+                title="Ocean Theme">
+            </button>
+
+            <button
+                class="theme-btn theme-emerald"
+                onclick="setTheme('emerald')"
+                title="Emerald Theme">
+            </button>
+
+            <button
+                class="theme-btn theme-sunset"
+                onclick="setTheme('sunset')"
+                title="Sunset Theme">
+            </button>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<!-- =====================================================
+     HERO
+===================================================== -->
+
+<section class="hero">
+
+    <div class="badge">
+
+        <i class="fa-solid fa-sparkles"></i>
+
+        AI-POWERED SENTIMENT INTELLIGENCE
+
+    </div>
+
+    <h1>
+
+        Understand Every
+        <span class="gradient-text">
+            Emotion.
+        </span>
+
+    </h1>
+
+    <p>
+
+        Analyze your text instantly using machine learning.
+        Discover whether your message carries a positive,
+        negative, or neutral sentiment.
+
+    </p>
+
+</section>
+
+
+<!-- =====================================================
+     MAIN
+===================================================== -->
+
+<main class="container">
+
+    <div class="main-card">
+
+
+        <!-- HEADER -->
+
+        <div class="card-header">
+
+            <div class="card-title">
+
+                <div class="card-title-icon">
+
+                    <i class="fa-solid fa-message"></i>
+
+                </div>
+
+                <div>
+
+                    <h2>Sentiment Analyzer</h2>
+
+                    <p>
+                        Enter your text and let the AI analyze it.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            {% if model_status %}
+
+            <div class="status">
+
+                <span class="status-dot"></span>
+
+                Model Online
+
+            </div>
+
+            {% endif %}
+
+        </div>
+
+
+        <!-- FORM -->
+
+        <form method="POST" id="sentimentForm">
+
+            <div class="input-wrapper">
+
+                <textarea
+                    id="textInput"
+                    name="text"
+                    maxlength="5000"
+                    placeholder="Type or paste your text here...
+
+Example:
+I absolutely loved this product. The quality is amazing!"
+                >{{ text }}</textarea>
+
+                <div class="counter">
+
+                    <span id="charCount">0</span>/5000
+
+                </div>
+
+            </div>
+
+
+            <!-- SAMPLE BUTTONS -->
+
+            <div class="samples">
+
+                <button
+                    type="button"
+                    class="sample"
+                    onclick="useSample('I absolutely loved this product! The quality is amazing.')">
+
+                    😊 Positive Example
+
+                </button>
+
+                <button
+                    type="button"
+                    class="sample"
+                    onclick="useSample('This is the worst experience I have ever had.')">
+
+                    😞 Negative Example
+
+                </button>
+
+                <button
+                    type="button"
+                    class="sample"
+                    onclick="useSample('The product arrived today.')">
+
+                    😐 Neutral Example
+
+                </button>
+
+            </div>
+
+
+            <button class="analyze-btn" type="submit">
+
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+
+                Analyze Sentiment
+
+            </button>
+
+        </form>
+
+
+        <!-- ERROR -->
+
+        {% if error %}
+
+        <div class="error">
+
+            <i class="fa-solid fa-circle-exclamation"></i>
+
+            &nbsp; {{ error }}
+
+        </div>
+
+        {% endif %}
+
+
+        <!-- RESULT -->
+
+        {% if result %}
+
+        <div class="result">
+
+            <div class="result-header">
+
+                <span class="result-label">
+                    Analysis Result
+                </span>
+
+                <i class="fa-solid fa-chart-simple"></i>
+
+            </div>
+
+
+            <div class="sentiment-box">
+
+                <div class="sentiment-icon {{ result.class }}">
+
+                    {{ result.emoji }}
+
+                </div>
+
+                <div>
+
+                    <div class="sentiment-name {{ result.class }}">
+
+                        {{ result.label }}
+
+                    </div>
+
+                    <div class="description">
+
+                        {{ result.description }}
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            {% if confidence is not none %}
+
+            <div class="confidence">
+
+                <div class="confidence-top">
+
+                    <span>
+                        Model Confidence
+                    </span>
+
+                    <span class="confidence-value">
+
+                        {{ confidence }}%
+
+                    </span>
+
+                </div>
+
+                <div class="progress">
+
+                    <div class="progress-bar"></div>
+
+                </div>
+
+            </div>
+
+            {% endif %}
+
+        </div>
+
+        {% endif %}
+
+
+        <!-- INFORMATION -->
+
+        <div class="info-grid">
+
+            <div class="info-card">
+
+                <i class="fa-solid fa-brain"></i>
+
+                <h3>Machine Learning</h3>
+
+                <p>
+                    Powered by a trained Naive Bayes
+                    classification model.
+                </p>
+
+            </div>
+
+
+            <div class="info-card">
+
+                <i class="fa-solid fa-chart-line"></i>
+
+                <h3>TF-IDF Analysis</h3>
+
+                <p>
+                    Text is transformed into numerical
+                    features using TF-IDF.
+                </p>
+
+            </div>
+
+
+            <div class="info-card">
+
+                <i class="fa-solid fa-bolt"></i>
+
+                <h3>Instant Results</h3>
+
+                <p>
+                    Get sentiment predictions within
+                    milliseconds.
+                </p>
+
+            </div>
+
+        </div>
+
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    Built with <span>Flask</span> •
+    Machine Learning •
+    Sentix AI
+
+</footer>
+
+
+<script>
+
+/* =========================================================
+   CHARACTER COUNTER
+========================================================= */
+
+const textInput = document.getElementById("textInput");
+const charCount = document.getElementById("charCount");
+
+function updateCounter() {
+
+    charCount.textContent =
+        textInput.value.length;
+
+}
+
+textInput.addEventListener(
+    "input",
+    updateCounter
+);
+
+updateCounter();
+
+
+/* =========================================================
+   SAMPLE TEXT
+========================================================= */
+
+function useSample(text) {
+
+    textInput.value = text;
+
+    updateCounter();
+
+    textInput.focus();
+
+}
+
+
+/* =========================================================
+   PREMIUM THEMES
+========================================================= */
+
+const themes = {
+
+    purple: {
+
+        primary: "#8b5cf6",
+        primary2: "#6366f1"
+
+    },
+
+    ocean: {
+
+        primary: "#06b6d4",
+        primary2: "#2563eb"
+
+    },
+
+    emerald: {
+
+        primary: "#10b981",
+        primary2: "#059669"
+
+    },
+
+    sunset: {
+
+        primary: "#f97316",
+        primary2: "#ec4899"
+
+    }
+
+};
+
+
+function setTheme(theme) {
+
+    const selected = themes[theme];
+
+    document.documentElement.style.setProperty(
+        "--primary",
+        selected.primary
+    );
+
+    document.documentElement.style.setProperty(
+        "--primary-2",
+        selected.primary2
+    );
+
+    localStorage.setItem(
+        "sentixTheme",
+        theme
+    );
+
+}
+
+
+/* =========================================================
+   LOAD SAVED THEME
+========================================================= */
+
+const savedTheme =
+    localStorage.getItem("sentixTheme");
+
+if (savedTheme && themes[savedTheme]) {
+
+    setTheme(savedTheme);
+
+}
+
+
+/* =========================================================
+   FORM LOADING
+========================================================= */
+
+document
+    .getElementById("sentimentForm")
+    .addEventListener("submit", function() {
+
+        const button =
+            this.querySelector(".analyze-btn");
+
+        button.innerHTML =
+            '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
+
+        button.style.pointerEvents = "none";
+
+    });
+
+
+/* =========================================================
+   KEYBOARD SHORTCUT
+   Ctrl + Enter = Analyze
+========================================================= */
+
+textInput.addEventListener(
+    "keydown",
+    function(event) {
+
+        if (
+            event.ctrlKey &&
+            event.key === "Enter"
+        ) {
+
+            document
+                .getElementById("sentimentForm")
+                .submit();
+
+        }
+
+    }
+);
+
 </script>
+
+
 </body>
+
 </html>
 """
 
-@app.route("/")
-def home():
-    return render_template_string(HTML)
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    try:
-        data = request.get_json(silent=True) or {}
-        text = str(data.get("text", "")).strip()
-
-        if not text:
-            return jsonify({"error": "Please provide text."}), 400
-
-        # The uploaded vectorizer is a fitted TfidfVectorizer with 5,000 features.
-        X = vectorizer.transform([text])
-
-        prediction = model.predict(X)[0]
-        probabilities = model.predict_proba(X)[0]
-
-        classes = [str(c) for c in model.classes_]
-        probability_map = {
-            label: round(float(prob) * 100, 2)
-            for label, prob in zip(classes, probabilities)
-        }
-
-        confidence = float(max(probabilities)) * 100
-
-        return jsonify({
-            "sentiment": str(prediction),
-            "confidence": round(confidence, 2),
-            "probabilities": probability_map
-        })
-
-    except Exception as exc:
-        return jsonify({"error": f"Prediction failed: {str(exc)}"}), 500
+# ============================================================
+# RUN APPLICATION
+# ============================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+
+    print("=" * 60)
+    print("        SENTIX AI - SENTIMENT ANALYSIS")
+    print("=" * 60)
+
+    if MODEL_STATUS:
+        print("✓ Model loaded successfully")
+        print("✓ TF-IDF Vectorizer loaded successfully")
+    else:
+        print("✗ Model loading failed")
+        print(MODEL_ERROR)
+
+    print("=" * 60)
+    print("Running at: http://127.0.0.1:5000")
+    print("=" * 60)
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )

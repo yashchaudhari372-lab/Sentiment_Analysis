@@ -1,4 +1,5 @@
 Flask
+gunicorn
 scikit-learn
 numpy
-gunicorn
+scipy

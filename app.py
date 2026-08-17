@@ -1,928 +1,1782 @@
 from flask import Flask, request, render_template_string, jsonify
 import pickle
 import os
+from datetime import datetime
 
 # ============================================================
-# SENTIMENT ANALYSIS - FLASK APPLICATION
-# Model     : Multinomial Naive Bayes
-# Vectorizer: TF-IDF
+# SENTIMENT ANALYSIS
+# Professional Flask Analytics Application
 # ============================================================
 
-app = Flask("Sentiment Analysis")
+app = Flask(__name__)
 
-# ------------------------------------------------------------
+# ============================================================
 # FILE PATHS
-# Keep app.py, model and vectorizer in the same folder
-# ------------------------------------------------------------
+# ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODEL_PATH = os.path.join(BASE_DIR, "model (1).pkl")
 VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
 
-# ------------------------------------------------------------
+
+# ============================================================
 # LOAD MODEL
-# ------------------------------------------------------------
+# ============================================================
+
+model = None
+vectorizer = None
+MODEL_STATUS = False
+MODEL_ERROR = None
 
 try:
-    with open(MODEL_PATH, "rb") as model_file:
-        model = pickle.load(model_file)
 
-    with open(VECTORIZER_PATH, "rb") as vectorizer_file:
-        vectorizer = pickle.load(vectorizer_file)
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+
+    with open(VECTORIZER_PATH, "rb") as f:
+        vectorizer = pickle.load(f)
 
     MODEL_STATUS = True
 
 except Exception as e:
-    model = None
-    vectorizer = None
+
     MODEL_STATUS = False
     MODEL_ERROR = str(e)
 
 
-# ------------------------------------------------------------
-# SENTIMENT HELPER
-# ------------------------------------------------------------
+# ============================================================
+# ANALYTICS STORAGE
+# ============================================================
 
-def get_sentiment_details(prediction, confidence=0):
-    """
-    Converts model prediction into UI-friendly information.
-    Works with common labels such as:
-    Positive, Negative, Neutral
-    """
+analytics = {
+
+    "total": 0,
+
+    "positive": 0,
+
+    "negative": 0,
+
+    "neutral": 0,
+
+    "confidence_total": 0,
+
+    "history": []
+
+}
+
+
+# ============================================================
+# SENTIMENT INFORMATION
+# ============================================================
+
+def get_sentiment_details(prediction):
 
     label = str(prediction).strip()
 
     normalized = label.lower()
 
     if "positive" in normalized:
+
         return {
+
             "label": "Positive",
+
             "emoji": "😊",
+
             "icon": "fa-face-smile",
+
             "class": "positive",
-            "description": "This text expresses a positive sentiment.",
-            "color": "positive"
+
+            "description":
+                "The text has been classified as positive."
+
         }
 
     elif "negative" in normalized:
+
         return {
+
             "label": "Negative",
+
             "emoji": "😞",
+
             "icon": "fa-face-frown",
+
             "class": "negative",
-            "description": "This text expresses a negative sentiment.",
-            "color": "negative"
+
+            "description":
+                "The text has been classified as negative."
+
         }
 
     elif "neutral" in normalized:
+
         return {
+
             "label": "Neutral",
+
             "emoji": "😐",
+
             "icon": "fa-face-meh",
+
             "class": "neutral",
-            "description": "This text expresses a neutral sentiment.",
-            "color": "neutral"
+
+            "description":
+                "The text has been classified as neutral."
+
         }
 
-    # Generic fallback
     return {
+
         "label": label.title(),
+
         "emoji": "🔍",
-        "icon": "fa-magnifying-glass-chart",
+
+        "icon": "fa-chart-simple",
+
         "class": "neutral",
-        "description": "The model has classified your text.",
-        "color": "neutral"
+
+        "description":
+            "The sentiment has been classified by the model."
+
     }
 
 
-# ------------------------------------------------------------
-# MAIN ROUTE
-# ------------------------------------------------------------
+# ============================================================
+# SENTIMENT PREDICTION
+# ============================================================
 
-@app.route("/", methods=["GET", "POST"])
+def analyze_text(text):
+
+    if not MODEL_STATUS:
+
+        raise Exception(
+            "Unable to load the model or vectorizer. "
+            "Please check your .pkl files."
+        )
+
+    transformed_text = vectorizer.transform([text])
+
+    prediction = model.predict(transformed_text)[0]
+
+    confidence = None
+
+    try:
+
+        probabilities = model.predict_proba(
+            transformed_text
+        )[0]
+
+        confidence = round(
+            float(max(probabilities)) * 100,
+            2
+        )
+
+    except Exception:
+
+        confidence = None
+
+    details = get_sentiment_details(
+        prediction
+    )
+
+    return details, confidence
+
+
+# ============================================================
+# UPDATE ANALYTICS
+# ============================================================
+
+def update_analytics(
+    details,
+    confidence,
+    text
+):
+
+    analytics["total"] += 1
+
+    sentiment = details["label"].lower()
+
+    if sentiment == "positive":
+
+        analytics["positive"] += 1
+
+    elif sentiment == "negative":
+
+        analytics["negative"] += 1
+
+    elif sentiment == "neutral":
+
+        analytics["neutral"] += 1
+
+    if confidence is not None:
+
+        analytics["confidence_total"] += confidence
+
+    history_item = {
+
+        "text":
+            text[:150],
+
+        "sentiment":
+            details["label"],
+
+        "emoji":
+            details["emoji"],
+
+        "confidence":
+            confidence,
+
+        "time":
+            datetime.now().strftime(
+                "%I:%M %p"
+            ),
+
+        "date":
+            datetime.now().strftime(
+                "%d %b %Y"
+            )
+
+    }
+
+    analytics["history"].insert(
+        0,
+        history_item
+    )
+
+    # Keep latest 25 records
+
+    analytics["history"] = \
+        analytics["history"][:25]
+
+
+# ============================================================
+# DASHBOARD DATA
+# ============================================================
+
+def dashboard_data():
+
+    total = analytics["total"]
+
+    if total > 0:
+
+        average_confidence = round(
+
+            analytics["confidence_total"]
+            / total,
+
+            2
+
+        )
+
+    else:
+
+        average_confidence = 0
+
+    return {
+
+        "total":
+            total,
+
+        "positive":
+            analytics["positive"],
+
+        "negative":
+            analytics["negative"],
+
+        "neutral":
+            analytics["neutral"],
+
+        "avg_confidence":
+            average_confidence,
+
+        "history":
+            analytics["history"]
+
+    }
+
+
+# ============================================================
+# HOME PAGE
+# ============================================================
+
+@app.route(
+    "/",
+    methods=["GET", "POST"]
+)
 def home():
 
     text = ""
+
     result = None
+
     confidence = None
+
     error = None
 
     if request.method == "POST":
 
-        text = request.form.get("text", "").strip()
+        text = request.form.get(
+            "text",
+            ""
+        ).strip()
 
         if not text:
-            error = "Please enter some text before analyzing."
 
-        elif not MODEL_STATUS:
-            error = "Model files could not be loaded. Please check the .pkl files."
+            error = (
+                "Please enter text "
+                "before analyzing."
+            )
 
         else:
+
             try:
-                # Transform text using your saved TF-IDF vectorizer
-                transformed_text = vectorizer.transform([text])
 
-                # Prediction
-                prediction = model.predict(transformed_text)[0]
+                result, confidence = \
+                    analyze_text(text)
 
-                # Confidence
-                try:
-                    probabilities = model.predict_proba(transformed_text)[0]
-                    confidence = round(float(max(probabilities)) * 100, 2)
-                except Exception:
-                    confidence = None
+                update_analytics(
 
-                result = get_sentiment_details(
-                    prediction,
-                    confidence if confidence else 0
+                    result,
+
+                    confidence,
+
+                    text
+
                 )
 
             except Exception as e:
-                error = f"Prediction error: {str(e)}"
+
+                error = str(e)
 
     return render_template_string(
-        HTML_TEMPLATE,
+
+        HTML,
+
         text=text,
+
         result=result,
+
         confidence=confidence,
+
         error=error,
-        model_status=MODEL_STATUS
+
+        model_status=MODEL_STATUS,
+
+        dashboard=dashboard_data()
+
     )
 
 
-# ------------------------------------------------------------
-# API ROUTE
-# Useful if you want to connect another frontend later
-# ------------------------------------------------------------
+# ============================================================
+# DASHBOARD API
+# ============================================================
 
-@app.route("/api/predict", methods=["POST"])
-def api_predict():
+@app.route(
+    "/api/dashboard"
+)
+def dashboard_api():
+
+    return jsonify({
+
+        "success": True,
+
+        "data":
+            dashboard_data()
+
+    })
+
+
+# ============================================================
+# PREDICTION API
+# ============================================================
+
+@app.route(
+    "/api/predict",
+    methods=["POST"]
+)
+def predict_api():
 
     if not MODEL_STATUS:
+
         return jsonify({
+
             "success": False,
-            "error": "Model files could not be loaded."
+
+            "error":
+                "Model files are not available."
+
         }), 500
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-    text = str(data.get("text", "")).strip()
+    text = str(
+        data.get(
+            "text",
+            ""
+        )
+    ).strip()
 
     if not text:
+
         return jsonify({
+
             "success": False,
-            "error": "Text is required."
+
+            "error":
+                "Text is required."
+
         }), 400
 
     try:
-        transformed_text = vectorizer.transform([text])
-        prediction = model.predict(transformed_text)[0]
 
-        confidence = None
+        result, confidence = \
+            analyze_text(text)
 
-        try:
-            probabilities = model.predict_proba(transformed_text)[0]
-            confidence = round(float(max(probabilities)) * 100, 2)
-        except Exception:
-            pass
+        update_analytics(
 
-        details = get_sentiment_details(prediction, confidence or 0)
+            result,
+
+            confidence,
+
+            text
+
+        )
 
         return jsonify({
+
             "success": True,
+
             "text": text,
-            "sentiment": details["label"],
-            "confidence": confidence,
-            "emoji": details["emoji"]
+
+            "sentiment":
+                result["label"],
+
+            "confidence":
+                confidence,
+
+            "emoji":
+                result["emoji"]
+
         })
 
     except Exception as e:
+
         return jsonify({
+
             "success": False,
+
             "error": str(e)
+
         }), 500
 
 
 # ============================================================
-# PREMIUM FRONTEND
+# CLEAR HISTORY
 # ============================================================
 
-HTML_TEMPLATE = r"""
+@app.route(
+    "/api/clear",
+    methods=["POST"]
+)
+def clear_history():
+
+    analytics["total"] = 0
+
+    analytics["positive"] = 0
+
+    analytics["negative"] = 0
+
+    analytics["neutral"] = 0
+
+    analytics["confidence_total"] = 0
+
+    analytics["history"] = []
+
+    return jsonify({
+
+        "success": True
+
+    })
+
+
+# ============================================================
+# PROFESSIONAL UI
+# ============================================================
+
+HTML = r"""
+
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>Sentix AI | Sentiment Intelligence</title>
+<meta
+name="viewport"
+content="width=device-width, initial-scale=1.0"
+>
 
-<!-- Google Font -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<title>
+Sentiment Analysis
+</title>
 
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-<!-- Font Awesome -->
-<link rel="stylesheet"
-href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<!-- =====================================================
+     FONTS
+===================================================== -->
+
+<link
+href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap"
+rel="stylesheet"
+>
+
+
+<!-- =====================================================
+     FONT AWESOME
+===================================================== -->
+
+<link
+rel="stylesheet"
+href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
+>
+
+
+<!-- =====================================================
+     CHART JS
+===================================================== -->
+
+<script
+src="https://cdn.jsdelivr.net/npm/chart.js">
+</script>
+
 
 <style>
 
+/* =========================================================
+   ROOT
+========================================================= */
+
 :root {
 
-    --bg: #070b14;
-    --card: rgba(17, 24, 39, 0.72);
-    --card-solid: #111827;
+    --background: #f6f8fc;
 
-    --text: #f8fafc;
-    --muted: #94a3b8;
+    --surface: #ffffff;
 
-    --primary: #8b5cf6;
-    --primary-2: #6366f1;
+    --surface-2: #f8fafc;
 
-    --border: rgba(255,255,255,0.09);
+    --text: #111827;
 
-    --success: #22c55e;
-    --danger: #ef4444;
-    --warning: #f59e0b;
+    --muted: #64748b;
+
+    --border: #e5e7eb;
+
+    --primary: #4f46e5;
+
+    --primary-light: #eef2ff;
+
+    --positive: #10b981;
+
+    --negative: #ef4444;
+
+    --neutral: #f59e0b;
+
+    --sidebar-width: 255px;
+
+    --radius: 16px;
 
     --shadow:
-        0 25px 80px rgba(0,0,0,0.35);
+        0 8px 30px
+        rgba(15, 23, 42, 0.06);
+
 }
+
+
+/* =========================================================
+   DARK THEME
+========================================================= */
+
+body.dark {
+
+    --background: #080c14;
+
+    --surface: #111827;
+
+    --surface-2: #0f172a;
+
+    --text: #f8fafc;
+
+    --muted: #94a3b8;
+
+    --border:
+        rgba(255,255,255,.08);
+
+    --primary: #818cf8;
+
+    --primary-light:
+        rgba(99,102,241,.12);
+
+    --shadow:
+        0 10px 35px
+        rgba(0,0,0,.25);
+
+}
+
+
+/* =========================================================
+   OCEAN THEME
+========================================================= */
+
+body.ocean {
+
+    --primary: #0284c7;
+
+    --primary-light:
+        #e0f2fe;
+
+}
+
+
+/* =========================================================
+   EMERALD THEME
+========================================================= */
+
+body.emerald {
+
+    --primary: #059669;
+
+    --primary-light:
+        #ecfdf5;
+
+}
+
+
+/* =========================================================
+   SUNSET THEME
+========================================================= */
+
+body.sunset {
+
+    --primary: #ea580c;
+
+    --primary-light:
+        #fff7ed;
+
+}
+
+
+/* =========================================================
+   RESET
+========================================================= */
 
 * {
+
     margin: 0;
+
     padding: 0;
+
     box-sizing: border-box;
+
 }
 
-html {
-    scroll-behavior: smooth;
-}
 
 body {
 
-    font-family: "DM Sans", sans-serif;
-
     background:
-        radial-gradient(
-            circle at 10% 10%,
-            rgba(139,92,246,0.18),
-            transparent 30%
-        ),
-        radial-gradient(
-            circle at 90% 20%,
-            rgba(59,130,246,0.14),
-            transparent 30%
-        ),
-        var(--bg);
+        var(--background);
 
-    color: var(--text);
+    color:
+        var(--text);
+
+    font-family:
+        "DM Sans",
+        sans-serif;
 
     min-height: 100vh;
 
-    overflow-x: hidden;
+    transition:
+        .25s;
+
 }
 
 
 /* =========================================================
-   BACKGROUND EFFECTS
+   APP
 ========================================================= */
 
-.bg-orb {
+.app {
+
+    display: flex;
+
+    min-height: 100vh;
+
+}
+
+
+/* =========================================================
+   SIDEBAR
+========================================================= */
+
+.sidebar {
 
     position: fixed;
 
-    width: 350px;
-    height: 350px;
+    top: 0;
 
-    border-radius: 50%;
+    left: 0;
 
-    filter: blur(90px);
+    bottom: 0;
 
-    opacity: 0.15;
+    width:
+        var(--sidebar-width);
 
-    pointer-events: none;
+    background:
+        var(--surface);
 
-    z-index: -1;
+    border-right:
+        1px solid var(--border);
 
-    animation: floatOrb 10s ease-in-out infinite;
-}
+    padding:
+        24px 15px;
 
-.orb-one {
+    z-index: 100;
 
-    background: #8b5cf6;
+    display:
+        flex;
 
-    top: 5%;
-    left: -100px;
-}
+    flex-direction:
+        column;
 
-.orb-two {
-
-    background: #06b6d4;
-
-    bottom: 5%;
-    right: -100px;
-
-    animation-delay: -4s;
-}
-
-@keyframes floatOrb {
-
-    0%,100% {
-        transform: translate(0,0);
-    }
-
-    50% {
-        transform: translate(40px,-30px);
-    }
 }
 
 
 /* =========================================================
-   NAVBAR
+   BRAND
 ========================================================= */
 
-.navbar {
+.brand {
 
-    width: 100%;
+    display:
+        flex;
 
-    padding: 22px 6%;
+    align-items:
+        center;
 
-    display: flex;
+    gap:
+        12px;
 
-    align-items: center;
+    padding:
+        0 10px;
 
-    justify-content: space-between;
+    margin-bottom:
+        38px;
 
-    border-bottom: 1px solid var(--border);
-
-    background: rgba(7,11,20,0.65);
-
-    backdrop-filter: blur(20px);
-
-    position: sticky;
-
-    top: 0;
-
-    z-index: 100;
 }
 
-.logo {
 
-    display: flex;
+.brand-logo {
 
-    align-items: center;
+    width:
+        42px;
 
-    gap: 12px;
+    height:
+        42px;
 
-    font-family: "Outfit";
-
-    font-weight: 800;
-
-    font-size: 22px;
-}
-
-.logo-icon {
-
-    width: 42px;
-    height: 42px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 13px;
+    border-radius:
+        12px;
 
     background:
         linear-gradient(
             135deg,
             var(--primary),
-            var(--primary-2)
+            #8b5cf6
         );
+
+    color:
+        white;
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    font-size:
+        17px;
 
     box-shadow:
-        0 8px 30px rgba(139,92,246,0.35);
+        0 8px 20px
+        rgba(79,70,229,.18);
+
 }
 
-.logo span {
+
+.brand-name {
+
+    font-family:
+        "Outfit";
+
+    font-weight:
+        800;
+
+    font-size:
+        18px;
+
+}
+
+
+.brand-subtitle {
+
+    color:
+        var(--muted);
+
+    font-size:
+        9px;
+
+    margin-top:
+        2px;
+
+    letter-spacing:
+        1px;
+
+    font-weight:
+        700;
+
+}
+
+
+/* =========================================================
+   NAV TITLE
+========================================================= */
+
+.nav-label {
+
+    color:
+        var(--muted);
+
+    font-size:
+        9px;
+
+    font-weight:
+        700;
+
+    text-transform:
+        uppercase;
+
+    letter-spacing:
+        1.2px;
+
+    padding:
+        0 12px 9px;
+
+}
+
+
+/* =========================================================
+   NAV ITEM
+========================================================= */
+
+.nav-item {
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    gap:
+        12px;
+
+    padding:
+        11px 13px;
+
+    border-radius:
+        10px;
+
+    color:
+        var(--muted);
+
+    font-size:
+        12px;
+
+    margin-bottom:
+        4px;
+
+    cursor:
+        pointer;
+
+    transition:
+        .2s;
+
+}
+
+
+.nav-item i {
+
+    width:
+        18px;
+
+    text-align:
+        center;
+
+}
+
+
+.nav-item:hover {
 
     background:
-        linear-gradient(
-            90deg,
-            #fff,
-            #c4b5fd
-        );
+        var(--surface-2);
 
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
+    color:
+        var(--text);
 
-.nav-actions {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 10px;
 }
 
 
-/* =========================================================
-   THEME BUTTONS
-========================================================= */
-
-.theme-selector {
-
-    display: flex;
-
-    gap: 6px;
-
-    padding: 5px;
-
-    background: rgba(255,255,255,0.05);
-
-    border: 1px solid var(--border);
-
-    border-radius: 12px;
-}
-
-.theme-btn {
-
-    width: 34px;
-    height: 30px;
-
-    border: none;
-
-    border-radius: 8px;
-
-    cursor: pointer;
-
-    transition: 0.25s;
-
-    color: white;
-
-    font-size: 12px;
-}
-
-.theme-btn:hover {
-    transform: translateY(-2px);
-}
-
-.theme-purple {
-    background: linear-gradient(135deg,#8b5cf6,#6366f1);
-}
-
-.theme-ocean {
-    background: linear-gradient(135deg,#06b6d4,#2563eb);
-}
-
-.theme-emerald {
-    background: linear-gradient(135deg,#10b981,#059669);
-}
-
-.theme-sunset {
-    background: linear-gradient(135deg,#f97316,#ec4899);
-}
-
-
-/* =========================================================
-   HERO
-========================================================= */
-
-.hero {
-
-    width: min(1150px, 92%);
-
-    margin: 75px auto 40px;
-
-    text-align: center;
-}
-
-.badge {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    gap: 8px;
-
-    padding: 8px 15px;
-
-    border: 1px solid rgba(139,92,246,0.25);
-
-    border-radius: 100px;
-
-    background: rgba(139,92,246,0.08);
-
-    color: #c4b5fd;
-
-    font-size: 13px;
-
-    font-weight: 600;
-
-    margin-bottom: 22px;
-}
-
-.badge i {
-    color: #a78bfa;
-}
-
-.hero h1 {
-
-    font-family: "Outfit";
-
-    font-size: clamp(42px, 6vw, 72px);
-
-    line-height: 1.05;
-
-    letter-spacing: -2px;
-
-    font-weight: 800;
-
-    margin-bottom: 20px;
-}
-
-.gradient-text {
+.nav-item.active {
 
     background:
-        linear-gradient(
-            90deg,
-            #a78bfa,
-            #60a5fa,
-            #22d3ee
-        );
+        var(--primary-light);
 
-    -webkit-background-clip: text;
+    color:
+        var(--primary);
 
-    -webkit-text-fill-color: transparent;
-}
+    font-weight:
+        700;
 
-.hero p {
-
-    max-width: 650px;
-
-    margin: auto;
-
-    color: var(--muted);
-
-    font-size: 17px;
-
-    line-height: 1.7;
 }
 
 
 /* =========================================================
-   MAIN CARD
+   SIDEBAR FOOTER
 ========================================================= */
 
-.container {
+.sidebar-footer {
 
-    width: min(1000px, 92%);
+    margin-top:
+        auto;
 
-    margin: 0 auto 80px;
-}
-
-.main-card {
-
-    position: relative;
-
-    background: var(--card);
-
-    border: 1px solid var(--border);
-
-    border-radius: 28px;
-
-    padding: 32px;
-
-    backdrop-filter: blur(25px);
-
-    box-shadow: var(--shadow);
-
-    overflow: hidden;
-}
-
-.main-card::before {
-
-    content: "";
-
-    position: absolute;
-
-    width: 300px;
-    height: 300px;
-
-    border-radius: 50%;
-
-    background: var(--primary);
-
-    filter: blur(120px);
-
-    opacity: 0.06;
-
-    top: -160px;
-    right: -100px;
 }
 
 
-/* =========================================================
-   CARD HEADER
-========================================================= */
-
-.card-header {
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: space-between;
-
-    gap: 20px;
-
-    margin-bottom: 25px;
-}
-
-.card-title {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 13px;
-}
-
-.card-title-icon {
-
-    width: 45px;
-    height: 45px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 14px;
+.status-card {
 
     background:
-        rgba(139,92,246,0.12);
+        var(--surface-2);
 
-    color: #a78bfa;
+    border:
+        1px solid var(--border);
+
+    padding:
+        14px;
+
+    border-radius:
+        13px;
+
+    margin-bottom:
+        12px;
+
 }
 
-.card-title h2 {
 
-    font-family: "Outfit";
+.status-line {
 
-    font-size: 20px;
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    gap:
+        7px;
+
+    font-size:
+        11px;
+
+    font-weight:
+        700;
+
 }
 
-.card-title p {
-
-    color: var(--muted);
-
-    font-size: 13px;
-
-    margin-top: 3px;
-}
-
-.status {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 7px;
-
-    padding: 7px 12px;
-
-    border-radius: 100px;
-
-    background: rgba(34,197,94,0.08);
-
-    border: 1px solid rgba(34,197,94,0.15);
-
-    color: #86efac;
-
-    font-size: 12px;
-
-    font-weight: 600;
-}
 
 .status-dot {
 
-    width: 7px;
-    height: 7px;
+    width:
+        7px;
 
-    border-radius: 50%;
+    height:
+        7px;
 
-    background: #22c55e;
+    border-radius:
+        50%;
 
-    box-shadow: 0 0 10px #22c55e;
+    background:
+        var(--positive);
 
-    animation: pulse 1.8s infinite;
+    box-shadow:
+        0 0 7px
+        var(--positive);
+
 }
 
-@keyframes pulse {
 
-    0%,100% {
-        opacity: 1;
-    }
+.status-card p {
 
-    50% {
-        opacity: .4;
-    }
+    font-size:
+        9px;
+
+    color:
+        var(--muted);
+
+    margin-top:
+        5px;
+
 }
 
 
 /* =========================================================
-   TEXT AREA
+   MAIN
 ========================================================= */
 
-.input-wrapper {
+.main {
 
-    position: relative;
+    margin-left:
+        var(--sidebar-width);
+
+    width:
+        calc(
+            100% -
+            var(--sidebar-width)
+        );
+
 }
+
+
+/* =========================================================
+   TOPBAR
+========================================================= */
+
+.topbar {
+
+    height:
+        72px;
+
+    background:
+        var(--surface);
+
+    border-bottom:
+        1px solid var(--border);
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        space-between;
+
+    padding:
+        0 32px;
+
+    position:
+        sticky;
+
+    top:
+        0;
+
+    z-index:
+        50;
+
+}
+
+
+.top-title h1 {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        21px;
+
+    font-weight:
+        800;
+
+}
+
+
+.top-title p {
+
+    color:
+        var(--muted);
+
+    font-size:
+        11px;
+
+    margin-top:
+        2px;
+
+}
+
+
+.theme-buttons {
+
+    display:
+        flex;
+
+    gap:
+        7px;
+
+}
+
+
+.theme-button {
+
+    width:
+        28px;
+
+    height:
+        28px;
+
+    border:
+        none;
+
+    border-radius:
+        8px;
+
+    cursor:
+        pointer;
+
+    transition:
+        .2s;
+
+}
+
+
+.theme-button:hover {
+
+    transform:
+        translateY(-2px);
+
+}
+
+
+.theme-light {
+
+    background:
+        #ffffff;
+
+    border:
+        1px solid #cbd5e1;
+
+}
+
+
+.theme-dark {
+
+    background:
+        #111827;
+
+}
+
+
+.theme-ocean {
+
+    background:
+        linear-gradient(
+            135deg,
+            #06b6d4,
+            #2563eb
+        );
+
+}
+
+
+.theme-emerald {
+
+    background:
+        linear-gradient(
+            135deg,
+            #10b981,
+            #059669
+        );
+
+}
+
+
+.theme-sunset {
+
+    background:
+        linear-gradient(
+            135deg,
+            #f97316,
+            #ec4899
+        );
+
+}
+
+
+/* =========================================================
+   CONTENT
+========================================================= */
+
+.content {
+
+    max-width:
+        1500px;
+
+    margin:
+        auto;
+
+    padding:
+        30px 32px 45px;
+
+}
+
+
+/* =========================================================
+   PAGE HEADER
+========================================================= */
+
+.page-header {
+
+    margin-bottom:
+        22px;
+
+}
+
+
+.page-header h2 {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        26px;
+
+    font-weight:
+        800;
+
+}
+
+
+.page-header p {
+
+    color:
+        var(--muted);
+
+    font-size:
+        12px;
+
+    margin-top:
+        4px;
+
+}
+
+
+/* =========================================================
+   KPI
+========================================================= */
+
+.kpi-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        repeat(4, 1fr);
+
+    gap:
+        15px;
+
+    margin-bottom:
+        18px;
+
+}
+
+
+.kpi {
+
+    background:
+        var(--surface);
+
+    border:
+        1px solid var(--border);
+
+    border-radius:
+        var(--radius);
+
+    padding:
+        19px;
+
+    box-shadow:
+        var(--shadow);
+
+    transition:
+        .2s;
+
+}
+
+
+.kpi:hover {
+
+    transform:
+        translateY(-2px);
+
+}
+
+
+.kpi-head {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+}
+
+
+.kpi-icon {
+
+    width:
+        38px;
+
+    height:
+        38px;
+
+    border-radius:
+        11px;
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    background:
+        var(--primary-light);
+
+    color:
+        var(--primary);
+
+}
+
+
+.kpi-icon.green {
+
+    color:
+        var(--positive);
+
+    background:
+        rgba(16,185,129,.10);
+
+}
+
+
+.kpi-icon.red {
+
+    color:
+        var(--negative);
+
+    background:
+        rgba(239,68,68,.10);
+
+}
+
+
+.kpi-icon.orange {
+
+    color:
+        var(--neutral);
+
+    background:
+        rgba(245,158,11,.10);
+
+}
+
+
+.kpi-label {
+
+    color:
+        var(--muted);
+
+    font-size:
+        11px;
+
+    margin-top:
+        15px;
+
+}
+
+
+.kpi-value {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        27px;
+
+    font-weight:
+        800;
+
+    margin-top:
+        2px;
+
+}
+
+
+.kpi-description {
+
+    color:
+        var(--muted);
+
+    font-size:
+        9px;
+
+    margin-top:
+        2px;
+
+}
+
+
+/* =========================================================
+   CHART GRID
+========================================================= */
+
+.chart-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        1.4fr 1fr;
+
+    gap:
+        16px;
+
+    margin-bottom:
+        18px;
+
+}
+
+
+.chart-card {
+
+    background:
+        var(--surface);
+
+    border:
+        1px solid var(--border);
+
+    border-radius:
+        var(--radius);
+
+    padding:
+        20px;
+
+    box-shadow:
+        var(--shadow);
+
+}
+
+
+.card-title {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        flex-start;
+
+    margin-bottom:
+        15px;
+
+}
+
+
+.card-title h3 {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        15px;
+
+}
+
+
+.card-title p {
+
+    color:
+        var(--muted);
+
+    font-size:
+        10px;
+
+    margin-top:
+        3px;
+
+}
+
+
+.chart-area {
+
+    height:
+        260px;
+
+}
+
+
+/* =========================================================
+   ANALYZER GRID
+========================================================= */
+
+.analyzer-grid {
+
+    display:
+        grid;
+
+    grid-template-columns:
+        1.25fr .75fr;
+
+    gap:
+        16px;
+
+    margin-bottom:
+        18px;
+
+}
+
+
+.analyzer-card {
+
+    background:
+        var(--surface);
+
+    border:
+        1px solid var(--border);
+
+    border-radius:
+        var(--radius);
+
+    padding:
+        22px;
+
+    box-shadow:
+        var(--shadow);
+
+}
+
+
+/* =========================================================
+   TEXTAREA
+========================================================= */
 
 textarea {
 
-    width: 100%;
+    width:
+        100%;
 
-    min-height: 190px;
+    height:
+        180px;
 
-    resize: vertical;
+    resize:
+        vertical;
 
-    border: 1px solid var(--border);
+    border:
+        1px solid var(--border);
 
-    border-radius: 20px;
+    background:
+        var(--surface-2);
 
-    background: rgba(0,0,0,0.2);
+    color:
+        var(--text);
 
-    color: var(--text);
+    border-radius:
+        12px;
 
-    padding: 22px;
+    padding:
+        15px;
 
-    font-family: "DM Sans";
+    font-family:
+        "DM Sans";
 
-    font-size: 16px;
+    font-size:
+        13px;
 
-    line-height: 1.7;
+    line-height:
+        1.6;
 
-    outline: none;
+    outline:
+        none;
 
-    transition: 0.3s;
+    transition:
+        .2s;
+
 }
 
-textarea::placeholder {
-    color: #64748b;
-}
 
 textarea:focus {
 
-    border-color: rgba(139,92,246,0.6);
+    border-color:
+        var(--primary);
 
     box-shadow:
-        0 0 0 4px rgba(139,92,246,0.08);
-}
+        0 0 0 3px
+        var(--primary-light);
 
-.counter {
-
-    position: absolute;
-
-    bottom: 14px;
-    right: 17px;
-
-    color: #64748b;
-
-    font-size: 12px;
 }
 
 
 /* =========================================================
-   SAMPLE TEXT
+   TEXTAREA FOOTER
 ========================================================= */
+
+.input-footer {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    margin-top:
+        8px;
+
+}
+
 
 .samples {
 
-    display: flex;
+    display:
+        flex;
 
-    flex-wrap: wrap;
+    gap:
+        5px;
 
-    gap: 8px;
+    flex-wrap:
+        wrap;
 
-    margin-top: 15px;
 }
+
 
 .sample {
 
-    border: 1px solid var(--border);
+    border:
+        1px solid var(--border);
 
-    background: rgba(255,255,255,0.03);
+    background:
+        var(--surface-2);
 
-    color: #cbd5e1;
+    color:
+        var(--muted);
 
-    border-radius: 10px;
+    border-radius:
+        7px;
 
-    padding: 8px 12px;
+    padding:
+        6px 9px;
 
-    font-size: 12px;
+    font-size:
+        9px;
 
-    cursor: pointer;
+    cursor:
+        pointer;
 
-    transition: .25s;
 }
+
 
 .sample:hover {
 
-    border-color: rgba(139,92,246,.4);
+    color:
+        var(--primary);
 
-    background: rgba(139,92,246,.08);
+    border-color:
+        var(--primary);
 
-    transform: translateY(-1px);
 }
 
 
 /* =========================================================
-   BUTTON
+   ANALYZE BUTTON
 ========================================================= */
 
-.analyze-btn {
+.analyze-button {
 
-    width: 100%;
+    width:
+        100%;
 
-    margin-top: 22px;
+    border:
+        none;
 
-    border: none;
+    border-radius:
+        11px;
 
-    border-radius: 16px;
+    padding:
+        13px;
 
-    padding: 17px;
+    margin-top:
+        16px;
 
-    font-size: 15px;
-
-    font-weight: 700;
-
-    color: white;
-
-    cursor: pointer;
-
-    font-family: "DM Sans";
+    color:
+        white;
 
     background:
         linear-gradient(
             135deg,
             var(--primary),
-            var(--primary-2)
+            #7c3aed
         );
 
-    box-shadow:
-        0 12px 35px rgba(99,102,241,0.25);
+    font-family:
+        "DM Sans";
 
-    transition: .3s;
+    font-size:
+        12px;
 
-    position: relative;
+    font-weight:
+        700;
 
-    overflow: hidden;
-}
-
-.analyze-btn:hover {
-
-    transform: translateY(-3px);
+    cursor:
+        pointer;
 
     box-shadow:
-        0 18px 45px rgba(99,102,241,0.38);
-}
+        0 8px 22px
+        rgba(79,70,229,.18);
 
-.analyze-btn:active {
-    transform: scale(.99);
-}
+    transition:
+        .2s;
 
-.analyze-btn i {
-    margin-right: 8px;
 }
 
 
-/* =========================================================
-   ERROR
-========================================================= */
+.analyze-button:hover {
 
-.error {
+    transform:
+        translateY(-2px);
 
-    margin-top: 20px;
-
-    padding: 15px 17px;
-
-    border-radius: 14px;
-
-    background: rgba(239,68,68,0.08);
-
-    border: 1px solid rgba(239,68,68,0.2);
-
-    color: #fca5a5;
-
-    font-size: 14px;
 }
 
 
@@ -932,241 +1786,462 @@ textarea:focus {
 
 .result {
 
-    margin-top: 28px;
+    height:
+        100%;
 
-    border-radius: 22px;
+    min-height:
+        280px;
 
-    border: 1px solid var(--border);
+    display:
+        flex;
 
-    padding: 25px;
+    align-items:
+        center;
 
-    background: rgba(255,255,255,0.025);
+    justify-content:
+        center;
 
-    animation: resultIn .5s ease;
-}
+    flex-direction:
+        column;
 
-@keyframes resultIn {
+    text-align:
+        center;
 
-    from {
-        opacity: 0;
-        transform: translateY(15px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.result-header {
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: space-between;
-
-    margin-bottom: 20px;
-}
-
-.result-label {
-
-    color: var(--muted);
-
-    font-size: 12px;
-
-    text-transform: uppercase;
-
-    letter-spacing: 1px;
-}
-
-.sentiment-box {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 17px;
-}
-
-.sentiment-icon {
-
-    width: 64px;
-    height: 64px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 20px;
-
-    font-size: 29px;
-}
-
-.sentiment-icon.positive {
-
-    background: rgba(34,197,94,0.1);
-
-    border: 1px solid rgba(34,197,94,0.2);
-}
-
-.sentiment-icon.negative {
-
-    background: rgba(239,68,68,0.1);
-
-    border: 1px solid rgba(239,68,68,0.2);
-}
-
-.sentiment-icon.neutral {
-
-    background: rgba(245,158,11,0.1);
-
-    border: 1px solid rgba(245,158,11,0.2);
-}
-
-.sentiment-name {
-
-    font-family: "Outfit";
-
-    font-size: 27px;
-
-    font-weight: 800;
-}
-
-.sentiment-name.positive {
-    color: #4ade80;
-}
-
-.sentiment-name.negative {
-    color: #f87171;
-}
-
-.sentiment-name.neutral {
-    color: #fbbf24;
-}
-
-.description {
-
-    color: var(--muted);
-
-    margin-top: 4px;
-
-    font-size: 13px;
 }
 
 
-/* =========================================================
-   CONFIDENCE
-========================================================= */
+.result-symbol {
 
-.confidence {
+    width:
+        78px;
 
-    margin-top: 25px;
+    height:
+        78px;
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    border-radius:
+        22px;
+
+    font-size:
+        35px;
+
+    margin-bottom:
+        12px;
+
 }
 
-.confidence-top {
 
-    display: flex;
+.result-symbol.positive {
 
-    justify-content: space-between;
+    background:
+        rgba(16,185,129,.10);
 
-    color: var(--muted);
-
-    font-size: 13px;
-
-    margin-bottom: 9px;
 }
 
-.confidence-value {
 
-    color: white;
+.result-symbol.negative {
 
-    font-weight: 700;
+    background:
+        rgba(239,68,68,.10);
+
 }
+
+
+.result-symbol.neutral {
+
+    background:
+        rgba(245,158,11,.10);
+
+}
+
+
+.result-title {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        26px;
+
+    font-weight:
+        800;
+
+}
+
+
+.result-title.positive {
+
+    color:
+        var(--positive);
+
+}
+
+
+.result-title.negative {
+
+    color:
+        var(--negative);
+
+}
+
+
+.result-title.neutral {
+
+    color:
+        var(--neutral);
+
+}
+
+
+.result-description {
+
+    color:
+        var(--muted);
+
+    font-size:
+        10px;
+
+    margin-top:
+        4px;
+
+}
+
+
+.confidence-box {
+
+    width:
+        85%;
+
+    margin-top:
+        20px;
+
+}
+
+
+.confidence-header {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    color:
+        var(--muted);
+
+    font-size:
+        10px;
+
+    margin-bottom:
+        6px;
+
+}
+
 
 .progress {
 
-    height: 9px;
+    height:
+        7px;
 
-    background: rgba(255,255,255,.07);
+    border-radius:
+        10px;
 
-    border-radius: 100px;
+    overflow:
+        hidden;
 
-    overflow: hidden;
+    background:
+        var(--border);
+
 }
 
-.progress-bar {
 
-    height: 100%;
+.progress-value {
 
-    border-radius: inherit;
+    height:
+        100%;
+
+    width:
+        {{ confidence or 0 }}%;
+
+    border-radius:
+        inherit;
 
     background:
         linear-gradient(
             90deg,
             var(--primary),
-            #22d3ee
+            #8b5cf6
         );
 
-    width: {{ confidence or 0 }}%;
-
-    transition: width 1s ease;
 }
 
 
 /* =========================================================
-   INFO CARDS
+   HISTORY
 ========================================================= */
 
-.info-grid {
+.history-card {
 
-    display: grid;
+    background:
+        var(--surface);
+
+    border:
+        1px solid var(--border);
+
+    border-radius:
+        var(--radius);
+
+    padding:
+        20px;
+
+    box-shadow:
+        var(--shadow);
+
+}
+
+
+.history-header {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    margin-bottom:
+        12px;
+
+}
+
+
+.history-header h3 {
+
+    font-family:
+        "Outfit";
+
+    font-size:
+        15px;
+
+}
+
+
+.history-header p {
+
+    color:
+        var(--muted);
+
+    font-size:
+        10px;
+
+    margin-top:
+        2px;
+
+}
+
+
+.clear-button {
+
+    background:
+        transparent;
+
+    border:
+        1px solid var(--border);
+
+    color:
+        var(--muted);
+
+    border-radius:
+        7px;
+
+    padding:
+        6px 9px;
+
+    font-size:
+        9px;
+
+    cursor:
+        pointer;
+
+}
+
+
+.clear-button:hover {
+
+    color:
+        var(--negative);
+
+    border-color:
+        var(--negative);
+
+}
+
+
+/* =========================================================
+   HISTORY ROW
+========================================================= */
+
+.history-row {
+
+    display:
+        grid;
 
     grid-template-columns:
-        repeat(3, 1fr);
+        40px 1fr 100px 80px 90px;
 
-    gap: 14px;
+    gap:
+        12px;
 
-    margin-top: 18px;
+    align-items:
+        center;
+
+    border-bottom:
+        1px solid var(--border);
+
+    padding:
+        11px 3px;
+
+    font-size:
+        10px;
+
 }
 
-.info-card {
 
-    padding: 18px;
+.history-row:last-child {
 
-    border-radius: 17px;
+    border-bottom:
+        none;
 
-    border: 1px solid var(--border);
-
-    background: rgba(255,255,255,.025);
 }
 
-.info-card i {
 
-    color: #a78bfa;
+.history-icon {
 
-    margin-bottom: 12px;
+    width:
+        30px;
 
-    font-size: 18px;
+    height:
+        30px;
+
+    border-radius:
+        8px;
+
+    background:
+        var(--surface-2);
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
 }
 
-.info-card h3 {
 
-    font-family: "Outfit";
+.history-text {
 
-    font-size: 14px;
+    white-space:
+        nowrap;
 
-    margin-bottom: 4px;
+    overflow:
+        hidden;
+
+    text-overflow:
+        ellipsis;
+
 }
 
-.info-card p {
 
-    color: var(--muted);
+.badge {
 
-    font-size: 12px;
+    display:
+        inline-block;
 
-    line-height: 1.5;
+    padding:
+        4px 7px;
+
+    border-radius:
+        6px;
+
+    font-size:
+        8px;
+
+    font-weight:
+        700;
+
+}
+
+
+.badge-positive {
+
+    color:
+        var(--positive);
+
+    background:
+        rgba(16,185,129,.10);
+
+}
+
+
+.badge-negative {
+
+    color:
+        var(--negative);
+
+    background:
+        rgba(239,68,68,.10);
+
+}
+
+
+.badge-neutral {
+
+    color:
+        var(--neutral);
+
+    background:
+        rgba(245,158,11,.10);
+
+}
+
+
+/* =========================================================
+   ERROR
+========================================================= */
+
+.error-message {
+
+    margin-top:
+        10px;
+
+    padding:
+        10px;
+
+    border-radius:
+        8px;
+
+    background:
+        rgba(239,68,68,.08);
+
+    color:
+        var(--negative);
+
+    font-size:
+        10px;
+
 }
 
 
@@ -1174,19 +2249,20 @@ textarea:focus {
    FOOTER
 ========================================================= */
 
-footer {
+.footer {
 
-    text-align: center;
+    text-align:
+        center;
 
-    padding: 30px;
+    color:
+        var(--muted);
 
-    color: #64748b;
+    font-size:
+        9px;
 
-    font-size: 12px;
-}
+    padding:
+        25px;
 
-footer span {
-    color: #a78bfa;
 }
 
 
@@ -1194,45 +2270,142 @@ footer span {
    RESPONSIVE
 ========================================================= */
 
-@media(max-width:700px) {
+@media(max-width:1100px) {
 
-    .navbar {
-        padding: 18px 4%;
+    .kpi-grid {
+
+        grid-template-columns:
+            repeat(2,1fr);
+
     }
 
-    .hero {
-        margin-top: 50px;
+    .chart-grid {
+
+        grid-template-columns:
+            1fr;
+
     }
 
-    .hero h1 {
-        letter-spacing: -1px;
+    .analyzer-grid {
+
+        grid-template-columns:
+            1fr;
+
     }
 
-    .main-card {
-        padding: 20px;
+}
 
-        border-radius: 22px;
+
+@media(max-width:720px) {
+
+    .sidebar {
+
+        width:
+            65px;
+
+        padding:
+            20px 7px;
+
     }
 
-    .card-header {
-        align-items: flex-start;
+    .brand-name,
+
+    .brand-subtitle,
+
+    .nav-label,
+
+    .nav-item span,
+
+    .status-card {
+
+        display:
+            none;
+
     }
 
-    .status {
-        display: none;
+    .brand {
+
+        justify-content:
+            center;
+
     }
 
-    .info-grid {
-        grid-template-columns: 1fr;
+    .nav-item {
+
+        justify-content:
+            center;
+
     }
 
-    .theme-selector {
-        gap: 3px;
+    .main {
+
+        margin-left:
+            65px;
+
+        width:
+            calc(
+                100% - 65px
+            );
+
     }
 
-    .theme-btn {
-        width: 30px;
+    .content {
+
+        padding:
+            20px 15px;
+
     }
+
+    .topbar {
+
+        padding:
+            0 15px;
+
+    }
+
+    .history-row {
+
+        grid-template-columns:
+            35px 1fr 80px;
+
+    }
+
+    .history-hide {
+
+        display:
+            none;
+
+    }
+
+}
+
+
+@media(max-width:450px) {
+
+    .kpi-grid {
+
+        grid-template-columns:
+            1fr;
+
+    }
+
+    .top-title h1 {
+
+        font-size:
+            17px;
+
+    }
+
+    .theme-button {
+
+        width:
+            23px;
+
+        height:
+            23px;
+
+    }
+
 }
 
 </style>
@@ -1242,133 +2415,131 @@ footer span {
 
 <body>
 
-<div class="bg-orb orb-one"></div>
-<div class="bg-orb orb-two"></div>
+
+<div class="app">
 
 
 <!-- =====================================================
-     NAVBAR
+     SIDEBAR
 ===================================================== -->
 
-<nav class="navbar">
-
-    <div class="logo">
-
-        <div class="logo-icon">
-            <i class="fa-solid fa-brain"></i>
-        </div>
-
-        <span>Sentix AI</span>
-
-    </div>
+<aside class="sidebar">
 
 
-    <div class="nav-actions">
+    <div class="brand">
 
-        <div class="theme-selector">
+        <div class="brand-logo">
 
-            <button
-                class="theme-btn theme-purple"
-                onclick="setTheme('purple')"
-                title="Purple Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-ocean"
-                onclick="setTheme('ocean')"
-                title="Ocean Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-emerald"
-                onclick="setTheme('emerald')"
-                title="Emerald Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-sunset"
-                onclick="setTheme('sunset')"
-                title="Sunset Theme">
-            </button>
+            <i class="fa-solid fa-chart-line"></i>
 
         </div>
 
-    </div>
+        <div>
 
-</nav>
+            <div class="brand-name">
 
-
-<!-- =====================================================
-     HERO
-===================================================== -->
-
-<section class="hero">
-
-    <div class="badge">
-
-        <i class="fa-solid fa-sparkles"></i>
-
-        AI-POWERED SENTIMENT INTELLIGENCE
-
-    </div>
-
-    <h1>
-
-        Understand Every
-        <span class="gradient-text">
-            Emotion.
-        </span>
-
-    </h1>
-
-    <p>
-
-        Analyze your text instantly using machine learning.
-        Discover whether your message carries a positive,
-        negative, or neutral sentiment.
-
-    </p>
-
-</section>
-
-
-<!-- =====================================================
-     MAIN
-===================================================== -->
-
-<main class="container">
-
-    <div class="main-card">
-
-
-        <!-- HEADER -->
-
-        <div class="card-header">
-
-            <div class="card-title">
-
-                <div class="card-title-icon">
-
-                    <i class="fa-solid fa-message"></i>
-
-                </div>
-
-                <div>
-
-                    <h2>Sentiment Analyzer</h2>
-
-                    <p>
-                        Enter your text and let the AI analyze it.
-                    </p>
-
-                </div>
+                Sentiment Analysis
 
             </div>
 
+            <div class="brand-subtitle">
 
-            {% if model_status %}
+                ANALYTICS PLATFORM
 
-            <div class="status">
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="nav-label">
+
+        Workspace
+
+    </div>
+
+
+    <div
+        class="nav-item active"
+        onclick="goTo('dashboard')"
+    >
+
+        <i class="fa-solid fa-table-columns"></i>
+
+        <span>
+            Dashboard
+        </span>
+
+    </div>
+
+
+    <div
+        class="nav-item"
+        onclick="goTo('analyzer')"
+    >
+
+        <i class="fa-solid fa-magnifying-glass-chart"></i>
+
+        <span>
+            Sentiment Analyzer
+        </span>
+
+    </div>
+
+
+    <div
+        class="nav-item"
+        onclick="goTo('history')"
+    >
+
+        <i class="fa-solid fa-clock-rotate-left"></i>
+
+        <span>
+            Analysis History
+        </span>
+
+    </div>
+
+
+    <div
+        class="nav-label"
+        style="margin-top:25px;"
+    >
+
+        Insights
+
+    </div>
+
+
+    <div class="nav-item">
+
+        <i class="fa-solid fa-chart-pie"></i>
+
+        <span>
+            Sentiment Metrics
+        </span>
+
+    </div>
+
+
+    <div class="nav-item">
+
+        <i class="fa-solid fa-brain"></i>
+
+        <span>
+            Model Information
+        </span>
+
+    </div>
+
+
+    <div class="sidebar-footer">
+
+
+        <div class="status-card">
+
+            <div class="status-line">
 
                 <span class="status-dot"></span>
 
@@ -1376,215 +2547,271 @@ footer span {
 
             </div>
 
-            {% endif %}
+            <p>
+
+                TF-IDF + Multinomial Naive Bayes
+
+            </p>
 
         </div>
 
 
-        <!-- FORM -->
+        <div class="nav-item">
 
-        <form method="POST" id="sentimentForm">
+            <i class="fa-solid fa-gear"></i>
 
-            <div class="input-wrapper">
-
-                <textarea
-                    id="textInput"
-                    name="text"
-                    maxlength="5000"
-                    placeholder="Type or paste your text here...
-
-Example:
-I absolutely loved this product. The quality is amazing!"
-                >{{ text }}</textarea>
-
-                <div class="counter">
-
-                    <span id="charCount">0</span>/5000
-
-                </div>
-
-            </div>
-
-
-            <!-- SAMPLE BUTTONS -->
-
-            <div class="samples">
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('I absolutely loved this product! The quality is amazing.')">
-
-                    😊 Positive Example
-
-                </button>
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('This is the worst experience I have ever had.')">
-
-                    😞 Negative Example
-
-                </button>
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('The product arrived today.')">
-
-                    😐 Neutral Example
-
-                </button>
-
-            </div>
-
-
-            <button class="analyze-btn" type="submit">
-
-                <i class="fa-solid fa-wand-magic-sparkles"></i>
-
-                Analyze Sentiment
-
-            </button>
-
-        </form>
-
-
-        <!-- ERROR -->
-
-        {% if error %}
-
-        <div class="error">
-
-            <i class="fa-solid fa-circle-exclamation"></i>
-
-            &nbsp; {{ error }}
+            <span>
+                Settings
+            </span>
 
         </div>
 
-        {% endif %}
+
+    </div>
 
 
-        <!-- RESULT -->
+</aside>
 
-        {% if result %}
 
-        <div class="result">
+<!-- =====================================================
+     MAIN
+===================================================== -->
 
-            <div class="result-header">
+<main class="main">
 
-                <span class="result-label">
-                    Analysis Result
-                </span>
 
-                <i class="fa-solid fa-chart-simple"></i>
+<!-- =====================================================
+     TOPBAR
+===================================================== -->
+
+<header class="topbar">
+
+
+    <div class="top-title">
+
+        <h1>
+            Sentiment Analysis
+        </h1>
+
+        <p>
+            Professional sentiment analytics dashboard
+        </p>
+
+    </div>
+
+
+    <div class="theme-buttons">
+
+
+        <button
+            class="theme-button theme-light"
+            onclick="setTheme('light')"
+            title="Light"
+        ></button>
+
+
+        <button
+            class="theme-button theme-dark"
+            onclick="setTheme('dark')"
+            title="Dark"
+        ></button>
+
+
+        <button
+            class="theme-button theme-ocean"
+            onclick="setTheme('ocean')"
+            title="Ocean"
+        ></button>
+
+
+        <button
+            class="theme-button theme-emerald"
+            onclick="setTheme('emerald')"
+            title="Emerald"
+        ></button>
+
+
+        <button
+            class="theme-button theme-sunset"
+            onclick="setTheme('sunset')"
+            title="Sunset"
+        ></button>
+
+
+    </div>
+
+
+</header>
+
+
+<!-- =====================================================
+     CONTENT
+===================================================== -->
+
+<section
+    class="content"
+    id="dashboard"
+>
+
+
+    <div class="page-header">
+
+        <h2>
+            Analytics Overview
+        </h2>
+
+        <p>
+            Monitor sentiment predictions and model confidence.
+        </p>
+
+    </div>
+
+
+    <!-- =================================================
+         KPI CARDS
+    ================================================== -->
+
+    <div class="kpi-grid">
+
+
+        <div class="kpi">
+
+            <div class="kpi-head">
+
+                <div class="kpi-icon">
+
+                    <i class="fa-solid fa-chart-column"></i>
+
+                </div>
 
             </div>
 
+            <div class="kpi-label">
 
-            <div class="sentiment-box">
-
-                <div class="sentiment-icon {{ result.class }}">
-
-                    {{ result.emoji }}
-
-                </div>
-
-                <div>
-
-                    <div class="sentiment-name {{ result.class }}">
-
-                        {{ result.label }}
-
-                    </div>
-
-                    <div class="description">
-
-                        {{ result.description }}
-
-                    </div>
-
-                </div>
+                Total Analyses
 
             </div>
 
+            <div
+                class="kpi-value"
+                id="total"
+            >
 
-            {% if confidence is not none %}
-
-            <div class="confidence">
-
-                <div class="confidence-top">
-
-                    <span>
-                        Model Confidence
-                    </span>
-
-                    <span class="confidence-value">
-
-                        {{ confidence }}%
-
-                    </span>
-
-                </div>
-
-                <div class="progress">
-
-                    <div class="progress-bar"></div>
-
-                </div>
+                {{ dashboard.total }}
 
             </div>
 
-            {% endif %}
+            <div class="kpi-description">
+
+                Total predictions processed
+
+            </div>
 
         </div>
 
-        {% endif %}
 
+        <div class="kpi">
 
-        <!-- INFORMATION -->
+            <div class="kpi-head">
 
-        <div class="info-grid">
+                <div class="kpi-icon green">
 
-            <div class="info-card">
+                    <i class="fa-solid fa-face-smile"></i>
 
-                <i class="fa-solid fa-brain"></i>
-
-                <h3>Machine Learning</h3>
-
-                <p>
-                    Powered by a trained Naive Bayes
-                    classification model.
-                </p>
+                </div>
 
             </div>
 
+            <div class="kpi-label">
 
-            <div class="info-card">
-
-                <i class="fa-solid fa-chart-line"></i>
-
-                <h3>TF-IDF Analysis</h3>
-
-                <p>
-                    Text is transformed into numerical
-                    features using TF-IDF.
-                </p>
+                Positive
 
             </div>
 
+            <div
+                class="kpi-value"
+                id="positive"
+            >
 
-            <div class="info-card">
+                {{ dashboard.positive }}
 
-                <i class="fa-solid fa-bolt"></i>
+            </div>
 
-                <h3>Instant Results</h3>
+            <div class="kpi-description">
 
-                <p>
-                    Get sentiment predictions within
-                    milliseconds.
-                </p>
+                Positive predictions
+
+            </div>
+
+        </div>
+
+
+        <div class="kpi">
+
+            <div class="kpi-head">
+
+                <div class="kpi-icon red">
+
+                    <i class="fa-solid fa-face-frown"></i>
+
+                </div>
+
+            </div>
+
+            <div class="kpi-label">
+
+                Negative
+
+            </div>
+
+            <div
+                class="kpi-value"
+                id="negative"
+            >
+
+                {{ dashboard.negative }}
+
+            </div>
+
+            <div class="kpi-description">
+
+                Negative predictions
+
+            </div>
+
+        </div>
+
+
+        <div class="kpi">
+
+            <div class="kpi-head">
+
+                <div class="kpi-icon orange">
+
+                    <i class="fa-solid fa-bullseye"></i>
+
+                </div>
+
+            </div>
+
+            <div class="kpi-label">
+
+                Average Confidence
+
+            </div>
+
+            <div
+                class="kpi-value"
+                id="confidence"
+            >
+
+                {{ dashboard.avg_confidence }}%
+
+            </div>
+
+            <div class="kpi-description">
+
+                Average model confidence
 
             </div>
 
@@ -1593,124 +2820,603 @@ I absolutely loved this product. The quality is amazing!"
 
     </div>
 
+
+    <!-- =================================================
+         CHARTS
+    ================================================== -->
+
+    <div class="chart-grid">
+
+
+        <div class="chart-card">
+
+
+            <div class="card-title">
+
+                <div>
+
+                    <h3>
+                        Sentiment Distribution
+                    </h3>
+
+                    <p>
+                        Prediction distribution by sentiment
+                    </p>
+
+                </div>
+
+                <i class="fa-solid fa-chart-pie"></i>
+
+            </div>
+
+
+            <div class="chart-area">
+
+                <canvas
+                    id="donutChart"
+                ></canvas>
+
+            </div>
+
+
+        </div>
+
+
+        <div class="chart-card">
+
+
+            <div class="card-title">
+
+                <div>
+
+                    <h3>
+                        Prediction Volume
+                    </h3>
+
+                    <p>
+                        Number of predictions by category
+                    </p>
+
+                </div>
+
+                <i class="fa-solid fa-chart-column"></i>
+
+            </div>
+
+
+            <div class="chart-area">
+
+                <canvas
+                    id="barChart"
+                ></canvas>
+
+            </div>
+
+
+        </div>
+
+
+    </div>
+
+
+    <!-- =================================================
+         ANALYZER
+    ================================================== -->
+
+    <div
+        class="analyzer-grid"
+        id="analyzer"
+    >
+
+
+        <!-- INPUT -->
+
+        <div class="analyzer-card">
+
+
+            <div class="card-title">
+
+                <div>
+
+                    <h3>
+                        Analyze Text
+                    </h3>
+
+                    <p>
+                        Enter text and generate a sentiment prediction.
+                    </p>
+
+                </div>
+
+                <i class="fa-solid fa-magnifying-glass-chart"></i>
+
+            </div>
+
+
+            <form
+                method="POST"
+                id="analysisForm"
+            >
+
+
+                <textarea
+                    id="textInput"
+                    name="text"
+                    maxlength="5000"
+                    placeholder="Enter text for sentiment analysis..."
+                >{{ text }}</textarea>
+
+
+                <div class="input-footer">
+
+
+                    <div class="samples">
+
+
+                        <button
+                            type="button"
+                            class="sample"
+                            onclick="sampleText('I am extremely happy with this product. The quality is excellent.')"
+                        >
+
+                            Positive Example
+
+                        </button>
+
+
+                        <button
+                            type="button"
+                            class="sample"
+                            onclick="sampleText('I am very disappointed with the service. It was a terrible experience.')"
+                        >
+
+                            Negative Example
+
+                        </button>
+
+
+                        <button
+                            type="button"
+                            class="sample"
+                            onclick="sampleText('The product was delivered today.')"
+                        >
+
+                            Neutral Example
+
+                        </button>
+
+
+                    </div>
+
+
+                    <span
+                        id="counter"
+                        style="
+                        color:var(--muted);
+                        font-size:9px;"
+                    >
+
+                        0 / 5000
+
+                    </span>
+
+
+                </div>
+
+
+                <button
+                    type="submit"
+                    class="analyze-button"
+                >
+
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+
+                    Analyze Sentiment
+
+                </button>
+
+
+            </form>
+
+
+            {% if error %}
+
+            <div class="error-message">
+
+                <i
+                    class="fa-solid fa-circle-exclamation"
+                ></i>
+
+                {{ error }}
+
+            </div>
+
+            {% endif %}
+
+
+        </div>
+
+
+        <!-- RESULT -->
+
+        <div class="analyzer-card">
+
+
+            <div class="card-title">
+
+                <div>
+
+                    <h3>
+                        Prediction Result
+                    </h3>
+
+                    <p>
+                        Latest model classification
+                    </p>
+
+                </div>
+
+                <i class="fa-solid fa-brain"></i>
+
+            </div>
+
+
+            <div class="result">
+
+
+                {% if result %}
+
+
+                <div
+                    class="result-symbol {{ result.class }}"
+                >
+
+                    {{ result.emoji }}
+
+                </div>
+
+
+                <div
+                    class="result-title {{ result.class }}"
+                >
+
+                    {{ result.label }}
+
+                </div>
+
+
+                <div class="result-description">
+
+                    {{ result.description }}
+
+                </div>
+
+
+                {% if confidence is not none %}
+
+
+                <div class="confidence-box">
+
+
+                    <div class="confidence-header">
+
+                        <span>
+                            Confidence
+                        </span>
+
+                        <strong>
+                            {{ confidence }}%
+                        </strong>
+
+                    </div>
+
+
+                    <div class="progress">
+
+                        <div
+                            class="progress-value"
+                        ></div>
+
+                    </div>
+
+
+                </div>
+
+
+                {% endif %}
+
+
+                {% else %}
+
+
+                <div
+                    class="result-symbol"
+                    style="
+                    background:var(--surface-2);
+                    color:var(--muted);"
+                >
+
+                    <i class="fa-solid fa-brain"></i>
+
+                </div>
+
+
+                <div
+                    class="result-title"
+                    style="font-size:19px;"
+                >
+
+                    Ready for Analysis
+
+                </div>
+
+
+                <div class="result-description">
+
+                    The prediction result will appear here.
+
+                </div>
+
+
+                {% endif %}
+
+
+            </div>
+
+
+        </div>
+
+
+    </div>
+
+
+    <!-- =================================================
+         HISTORY
+    ================================================== -->
+
+    <div
+        class="history-card"
+        id="history"
+    >
+
+
+        <div class="history-header">
+
+
+            <div>
+
+                <h3>
+                    Recent Analysis
+                </h3>
+
+                <p>
+                    Latest sentiment prediction activity
+                </p>
+
+            </div>
+
+
+            <button
+                class="clear-button"
+                onclick="clearHistory()"
+            >
+
+                <i class="fa-solid fa-trash"></i>
+
+                Clear
+
+            </button>
+
+
+        </div>
+
+
+        {% if dashboard.history %}
+
+
+            {% for item in dashboard.history %}
+
+
+            <div class="history-row">
+
+
+                <div class="history-icon">
+
+                    {{ item.emoji }}
+
+                </div>
+
+
+                <div class="history-text">
+
+                    {{ item.text }}
+
+                </div>
+
+
+                <div>
+
+
+                    {% if item.sentiment == "Positive" %}
+
+                    <span
+                        class="badge badge-positive"
+                    >
+                        Positive
+                    </span>
+
+                    {% elif item.sentiment == "Negative" %}
+
+                    <span
+                        class="badge badge-negative"
+                    >
+                        Negative
+                    </span>
+
+                    {% else %}
+
+                    <span
+                        class="badge badge-neutral"
+                    >
+                        Neutral
+                    </span>
+
+                    {% endif %}
+
+
+                </div>
+
+
+                <div class="history-hide">
+
+                    {% if item.confidence %}
+
+                        {{ item.confidence }}%
+
+                    {% else %}
+
+                        —
+
+                    {% endif %}
+
+                </div>
+
+
+                <div class="history-hide">
+
+                    {{ item.time }}
+
+                </div>
+
+
+            </div>
+
+
+            {% endfor %}
+
+
+        {% else %}
+
+
+        <div
+            style="
+            text-align:center;
+            padding:30px;
+            color:var(--muted);
+            font-size:10px;"
+        >
+
+            <i
+                class="fa-solid fa-clock-rotate-left"
+                style="
+                font-size:22px;
+                margin-bottom:8px;"
+            ></i>
+
+            <br>
+
+            No analysis history available.
+
+        </div>
+
+
+        {% endif %}
+
+
+    </div>
+
+
+</section>
+
+
+<div class="footer">
+
+    Sentiment Analysis
+    &nbsp;•&nbsp;
+    Flask
+    &nbsp;•&nbsp;
+    TF-IDF
+    &nbsp;•&nbsp;
+    Multinomial Naive Bayes
+
+</div>
+
+
 </main>
 
+</div>
 
-<footer>
 
-    Built with <span>Flask</span> •
-    Machine Learning •
-    Sentix AI
-
-</footer>
-
+<!-- =====================================================
+     JAVASCRIPT
+===================================================== -->
 
 <script>
 
-/* =========================================================
-   CHARACTER COUNTER
-========================================================= */
-
-const textInput = document.getElementById("textInput");
-const charCount = document.getElementById("charCount");
-
-function updateCounter() {
-
-    charCount.textContent =
-        textInput.value.length;
-
-}
-
-textInput.addEventListener(
-    "input",
-    updateCounter
-);
-
-updateCounter();
-
 
 /* =========================================================
-   SAMPLE TEXT
+   DASHBOARD DATA
 ========================================================= */
 
-function useSample(text) {
+const data = {
 
-    textInput.value = text;
+    positive:
+        {{ dashboard.positive }},
 
-    updateCounter();
+    negative:
+        {{ dashboard.negative }},
 
-    textInput.focus();
-
-}
-
-
-/* =========================================================
-   PREMIUM THEMES
-========================================================= */
-
-const themes = {
-
-    purple: {
-
-        primary: "#8b5cf6",
-        primary2: "#6366f1"
-
-    },
-
-    ocean: {
-
-        primary: "#06b6d4",
-        primary2: "#2563eb"
-
-    },
-
-    emerald: {
-
-        primary: "#10b981",
-        primary2: "#059669"
-
-    },
-
-    sunset: {
-
-        primary: "#f97316",
-        primary2: "#ec4899"
-
-    }
+    neutral:
+        {{ dashboard.neutral }}
 
 };
 
 
+/* =========================================================
+   THEME
+========================================================= */
+
 function setTheme(theme) {
 
-    const selected = themes[theme];
+    document.body.classList.remove(
 
-    document.documentElement.style.setProperty(
-        "--primary",
-        selected.primary
+        "dark",
+
+        "ocean",
+
+        "emerald",
+
+        "sunset"
+
     );
 
-    document.documentElement.style.setProperty(
-        "--primary-2",
-        selected.primary2
-    );
+
+    if (theme !== "light") {
+
+        document.body.classList.add(
+            theme
+        );
+
+    }
+
 
     localStorage.setItem(
-        "sentixTheme",
+        "sentiment-theme",
         theme
     );
 
 }
 
 
-/* =========================================================
-   LOAD SAVED THEME
-========================================================= */
+/* Load theme */
 
 const savedTheme =
-    localStorage.getItem("sentixTheme");
+    localStorage.getItem(
+        "sentiment-theme"
+    );
 
-if (savedTheme && themes[savedTheme]) {
+
+if (savedTheme) {
 
     setTheme(savedTheme);
 
@@ -1718,46 +3424,386 @@ if (savedTheme && themes[savedTheme]) {
 
 
 /* =========================================================
-   FORM LOADING
+   SAMPLE TEXT
 ========================================================= */
 
-document
-    .getElementById("sentimentForm")
-    .addEventListener("submit", function() {
+function sampleText(text) {
 
-        const button =
-            this.querySelector(".analyze-btn");
+    const input =
+        document.getElementById(
+            "textInput"
+        );
 
-        button.innerHTML =
-            '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
+    input.value = text;
 
-        button.style.pointerEvents = "none";
+    updateCounter();
 
-    });
+    input.focus();
+
+}
 
 
 /* =========================================================
-   KEYBOARD SHORTCUT
-   Ctrl + Enter = Analyze
+   CHARACTER COUNTER
 ========================================================= */
 
-textInput.addEventListener(
-    "keydown",
-    function(event) {
+function updateCounter() {
 
-        if (
-            event.ctrlKey &&
-            event.key === "Enter"
-        ) {
+    const input =
+        document.getElementById(
+            "textInput"
+        );
 
-            document
-                .getElementById("sentimentForm")
-                .submit();
+    const counter =
+        document.getElementById(
+            "counter"
+        );
+
+    counter.innerText =
+        input.value.length +
+        " / 5000";
+
+}
+
+
+document
+    .getElementById("textInput")
+    .addEventListener(
+        "input",
+        updateCounter
+    );
+
+
+updateCounter();
+
+
+/* =========================================================
+   DOUGHNUT CHART
+========================================================= */
+
+new Chart(
+
+    document.getElementById(
+        "donutChart"
+    ),
+
+    {
+
+        type: "doughnut",
+
+        data: {
+
+            labels: [
+
+                "Positive",
+
+                "Negative",
+
+                "Neutral"
+
+            ],
+
+            datasets: [{
+
+                data: [
+
+                    data.positive,
+
+                    data.negative,
+
+                    data.neutral
+
+                ],
+
+                backgroundColor: [
+
+                    "#10b981",
+
+                    "#ef4444",
+
+                    "#f59e0b"
+
+                ],
+
+                borderWidth: 0,
+
+                hoverOffset: 7
+
+            }]
+
+        },
+
+        options: {
+
+            responsive: true,
+
+            maintainAspectRatio: false,
+
+            cutout: "72%",
+
+            plugins: {
+
+                legend: {
+
+                    position: "bottom",
+
+                    labels: {
+
+                        usePointStyle: true,
+
+                        padding: 15,
+
+                        font: {
+                            size: 10
+                        }
+
+                    }
+
+                }
+
+            }
 
         }
 
     }
+
 );
+
+
+/* =========================================================
+   BAR CHART
+========================================================= */
+
+new Chart(
+
+    document.getElementById(
+        "barChart"
+    ),
+
+    {
+
+        type: "bar",
+
+        data: {
+
+            labels: [
+
+                "Positive",
+
+                "Negative",
+
+                "Neutral"
+
+            ],
+
+            datasets: [{
+
+                data: [
+
+                    data.positive,
+
+                    data.negative,
+
+                    data.neutral
+
+                ],
+
+                backgroundColor: [
+
+                    "#10b981",
+
+                    "#ef4444",
+
+                    "#f59e0b"
+
+                ],
+
+                borderRadius: 7,
+
+                borderSkipped: false
+
+            }]
+
+        },
+
+        options: {
+
+            responsive: true,
+
+            maintainAspectRatio: false,
+
+            scales: {
+
+                y: {
+
+                    beginAtZero: true,
+
+                    ticks: {
+
+                        precision: 0,
+
+                        font: {
+                            size: 9
+                        }
+
+                    },
+
+                    grid: {
+
+                        color:
+                            "rgba(148,163,184,.12)"
+
+                    }
+
+                },
+
+                x: {
+
+                    grid: {
+                        display: false
+                    },
+
+                    ticks: {
+
+                        font: {
+                            size: 9
+                        }
+
+                    }
+
+                }
+
+            },
+
+            plugins: {
+
+                legend: {
+                    display: false
+                }
+
+            }
+
+        }
+
+    }
+
+);
+
+
+/* =========================================================
+   FORM LOADING
+========================================================= */
+
+document
+    .getElementById(
+        "analysisForm"
+    )
+    .addEventListener(
+        "submit",
+        function() {
+
+            const button =
+                this.querySelector(
+                    ".analyze-button"
+                );
+
+            button.innerHTML =
+                '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
+
+            button.disabled = true;
+
+        }
+    );
+
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
+
+function goTo(id) {
+
+    document
+        .getElementById(id)
+        .scrollIntoView({
+
+            behavior:
+                "smooth"
+
+        });
+
+}
+
+
+/* =========================================================
+   CLEAR HISTORY
+========================================================= */
+
+async function clearHistory() {
+
+    const confirmClear =
+        confirm(
+            "Are you sure you want to clear the analysis history?"
+        );
+
+
+    if (!confirmClear) {
+
+        return;
+
+    }
+
+
+    try {
+
+        await fetch(
+            "/api/clear",
+            {
+                method:
+                    "POST"
+            }
+        );
+
+        location.reload();
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+    }
+
+}
+
+
+/* =========================================================
+   CTRL + ENTER
+========================================================= */
+
+document
+    .getElementById(
+        "textInput"
+    )
+    .addEventListener(
+        "keydown",
+        function(event) {
+
+            if (
+                event.ctrlKey &&
+                event.key === "Enter"
+            ) {
+
+                document
+                    .getElementById(
+                        "analysisForm"
+                    )
+                    .submit();
+
+            }
+
+        }
+    );
+
 
 </script>
 
@@ -1765,32 +3811,67 @@ textInput.addEventListener(
 </body>
 
 </html>
+
 """
 
 
 # ============================================================
-# RUN APPLICATION
+# START APPLICATION
 # ============================================================
 
 if __name__ == "__main__":
 
-    print("=" * 60)
-    print("        SENTIX AI - SENTIMENT ANALYSIS")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+
+    print(
+        "                 SENTIMENT ANALYSIS"
+    )
+
+    print(
+        "              Professional Dashboard"
+    )
+
+    print("=" * 65)
 
     if MODEL_STATUS:
-        print("✓ Model loaded successfully")
-        print("✓ TF-IDF Vectorizer loaded successfully")
-    else:
-        print("✗ Model loading failed")
-        print(MODEL_ERROR)
 
-    print("=" * 60)
-    print("Running at: http://127.0.0.1:5000")
-    print("=" * 60)
+        print(
+            "✓ Model loaded successfully"
+        )
+
+        print(
+            "✓ Vectorizer loaded successfully"
+        )
+
+    else:
+
+        print(
+            "✗ Model loading failed"
+        )
+
+        print(
+            f"Reason: {MODEL_ERROR}"
+        )
+
+    print("=" * 65)
+
+    print(
+        "Application URL:"
+    )
+
+    print(
+        "http://127.0.0.1:5000"
+    )
+
+    print("=" * 65 + "\n")
+
 
     app.run(
+
         host="0.0.0.0",
+
         port=5000,
+
         debug=True
+
     )

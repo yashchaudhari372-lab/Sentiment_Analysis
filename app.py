@@ -1,262 +1,111 @@
-from flask import Flask, request, render_template_string, jsonify
-import pickle
+from flask import Flask, render_template_string, request, jsonify
+import joblib
 import os
-
-# ============================================================
-# SENTIMENT ANALYSIS - FLASK APPLICATION
-# Model     : Multinomial Naive Bayes
-# Vectorizer: TF-IDF
-# ============================================================
+import re
 
 app = Flask(__name__)
 
-# ------------------------------------------------------------
-# FILE PATHS
-# Keep app.py, model and vectorizer in the same folder
-# ------------------------------------------------------------
+# ============================================================
+# SENTIMENT ANALYSIS
+# Model files:
+#   model (1)(2).pkl       -> MultinomialNB
+#   vectorizer(2).pkl      -> TF-IDF Vectorizer
+# ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODEL_PATH = os.path.join(BASE_DIR, "model (1).pkl")
 VECTORIZER_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
 
-# ------------------------------------------------------------
-# LOAD MODEL
-# ------------------------------------------------------------
-
-try:
-    with open(MODEL_PATH, "rb") as model_file:
-        model = pickle.load(model_file)
-
-    with open(VECTORIZER_PATH, "rb") as vectorizer_file:
-        vectorizer = pickle.load(vectorizer_file)
-
-    MODEL_STATUS = True
-
-except Exception as e:
-    model = None
-    vectorizer = None
-    MODEL_STATUS = False
-    MODEL_ERROR = str(e)
+model = joblib.load(MODEL_PATH)
+vectorizer = joblib.load(VECTORIZER_PATH)
 
 
-# ------------------------------------------------------------
-# SENTIMENT HELPER
-# ------------------------------------------------------------
+def clean_text(text):
+    """Light cleaning while keeping useful sentiment words."""
+    text = str(text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
 
-def get_sentiment_details(prediction, confidence=0):
-    """
-    Converts model prediction into UI-friendly information.
-    Works with common labels such as:
-    Positive, Negative, Neutral
-    """
 
-    label = str(prediction).strip()
+def analyze_sentiment(text):
+    text = clean_text(text)
 
-    normalized = label.lower()
-
-    if "positive" in normalized:
+    if not text:
         return {
-            "label": "Positive",
-            "emoji": "😊",
-            "icon": "fa-face-smile",
-            "class": "positive",
-            "description": "This text expresses a positive sentiment.",
-            "color": "positive"
+            "sentiment": "Unknown",
+            "confidence": 0,
+            "positive": 0,
+            "negative": 0,
         }
 
-    elif "negative" in normalized:
-        return {
-            "label": "Negative",
-            "emoji": "😞",
-            "icon": "fa-face-frown",
-            "class": "negative",
-            "description": "This text expresses a negative sentiment.",
-            "color": "negative"
-        }
+    transformed = vectorizer.transform([text])
+    prediction = model.predict(transformed)[0]
+    probabilities = model.predict_proba(transformed)[0]
 
-    elif "neutral" in normalized:
-        return {
-            "label": "Neutral",
-            "emoji": "😐",
-            "icon": "fa-face-meh",
-            "class": "neutral",
-            "description": "This text expresses a neutral sentiment.",
-            "color": "neutral"
-        }
+    classes = list(model.classes_)
+    probability_map = {
+        str(label).lower(): float(prob)
+        for label, prob in zip(classes, probabilities)
+    }
 
-    # Generic fallback
+    sentiment = str(prediction).lower()
+
+    # Works with the uploaded model's positive/negative classes.
+    positive = probability_map.get("positive", 0.0)
+    negative = probability_map.get("negative", 0.0)
+
+    confidence = probability_map.get(sentiment, max(probabilities))
+
     return {
-        "label": label.title(),
-        "emoji": "🔍",
-        "icon": "fa-magnifying-glass-chart",
-        "class": "neutral",
-        "description": "The model has classified your text.",
-        "color": "neutral"
+        "sentiment": sentiment.title(),
+        "confidence": round(confidence * 100, 2),
+        "positive": round(positive * 100, 2),
+        "negative": round(negative * 100, 2),
     }
 
 
-# ------------------------------------------------------------
-# MAIN ROUTE
-# ------------------------------------------------------------
-
-@app.route("/", methods=["GET", "POST"])
-def home():
-
-    text = ""
-    result = None
-    confidence = None
-    error = None
-
-    if request.method == "POST":
-
-        text = request.form.get("text", "").strip()
-
-        if not text:
-            error = "Please enter some text before analyzing."
-
-        elif not MODEL_STATUS:
-            error = "Model files could not be loaded. Please check the .pkl files."
-
-        else:
-            try:
-                # Transform text using your saved TF-IDF vectorizer
-                transformed_text = vectorizer.transform([text])
-
-                # Prediction
-                prediction = model.predict(transformed_text)[0]
-
-                # Confidence
-                try:
-                    probabilities = model.predict_proba(transformed_text)[0]
-                    confidence = round(float(max(probabilities)) * 100, 2)
-                except Exception:
-                    confidence = None
-
-                result = get_sentiment_details(
-                    prediction,
-                    confidence if confidence else 0
-                )
-
-            except Exception as e:
-                error = f"Prediction error: {str(e)}"
-
-    return render_template_string(
-        HTML_TEMPLATE,
-        text=text,
-        result=result,
-        confidence=confidence,
-        error=error,
-        model_status=MODEL_STATUS
-    )
-
-
-# ------------------------------------------------------------
-# API ROUTE
-# Useful if you want to connect another frontend later
-# ------------------------------------------------------------
-
-@app.route("/api/predict", methods=["POST"])
-def api_predict():
-
-    if not MODEL_STATUS:
-        return jsonify({
-            "success": False,
-            "error": "Model files could not be loaded."
-        }), 500
-
-    data = request.get_json(silent=True) or {}
-
-    text = str(data.get("text", "")).strip()
-
-    if not text:
-        return jsonify({
-            "success": False,
-            "error": "Text is required."
-        }), 400
-
-    try:
-        transformed_text = vectorizer.transform([text])
-        prediction = model.predict(transformed_text)[0]
-
-        confidence = None
-
-        try:
-            probabilities = model.predict_proba(transformed_text)[0]
-            confidence = round(float(max(probabilities)) * 100, 2)
-        except Exception:
-            pass
-
-        details = get_sentiment_details(prediction, confidence or 0)
-
-        return jsonify({
-            "success": True,
-            "text": text,
-            "sentiment": details["label"],
-            "confidence": confidence,
-            "emoji": details["emoji"]
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-# ============================================================
-# PREMIUM FRONTEND
-# ============================================================
-
-HTML_TEMPLATE = r"""
+HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Sentiment Analysis | Sentiment Intelligence</title>
-
-<!-- Google Font -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-
-<!-- Font Awesome -->
-<link rel="stylesheet"
-href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<title>Sentiment Analysis</title>
 
 <style>
-
 :root {
+    --bg: #f5f7fb;
+    --surface: rgba(255,255,255,.82);
+    --surface-solid: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --border: rgba(17,24,39,.09);
+    --primary: #635bff;
+    --primary-2: #8b5cf6;
+    --positive: #10b981;
+    --negative: #ef4444;
+    --shadow: 0 25px 70px rgba(15,23,42,.10);
+    --soft-shadow: 0 12px 35px rgba(15,23,42,.08);
+}
 
-    --bg: #070b14;
-    --card: rgba(17, 24, 39, 0.72);
-    --card-solid: #111827;
-
+[data-theme="dark"] {
+    --bg: #080b14;
+    --surface: rgba(17,24,39,.78);
+    --surface-solid: #111827;
     --text: #f8fafc;
     --muted: #94a3b8;
-
-    --primary: #8b5cf6;
-    --primary-2: #6366f1;
-
-    --border: rgba(255,255,255,0.09);
-
-    --success: #22c55e;
-    --danger: #ef4444;
-    --warning: #f59e0b;
-
-    --shadow:
-        0 25px 80px rgba(0,0,0,0.35);
+    --border: rgba(255,255,255,.09);
+    --primary: #8b7cff;
+    --primary-2: #a78bfa;
+    --shadow: 0 25px 80px rgba(0,0,0,.38);
+    --soft-shadow: 0 12px 35px rgba(0,0,0,.25);
 }
 
 * {
+    box-sizing: border-box;
     margin: 0;
     padding: 0;
-    box-sizing: border-box;
 }
 
 html {
@@ -264,1633 +113,863 @@ html {
 }
 
 body {
-
-    font-family: "DM Sans", sans-serif;
-
-    background:
-        radial-gradient(
-            circle at 10% 10%,
-            rgba(139,92,246,0.18),
-            transparent 30%
-        ),
-        radial-gradient(
-            circle at 90% 20%,
-            rgba(59,130,246,0.14),
-            transparent 30%
-        ),
-        var(--bg);
-
-    color: var(--text);
-
     min-height: 100vh;
-
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif;
+    background:
+        radial-gradient(circle at 8% 10%, rgba(99,91,255,.16), transparent 28%),
+        radial-gradient(circle at 90% 15%, rgba(139,92,246,.13), transparent 26%),
+        var(--bg);
+    color: var(--text);
+    transition: background .35s ease, color .35s ease;
     overflow-x: hidden;
 }
 
-
-/* =========================================================
-   BACKGROUND EFFECTS
-========================================================= */
-
-.bg-orb {
-
+body::before {
+    content: "";
     position: fixed;
-
-    width: 350px;
-    height: 350px;
-
-    border-radius: 50%;
-
-    filter: blur(90px);
-
-    opacity: 0.15;
-
+    inset: 0;
     pointer-events: none;
-
-    z-index: -1;
-
-    animation: floatOrb 10s ease-in-out infinite;
+    background-image:
+        linear-gradient(rgba(99,91,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,91,255,.025) 1px, transparent 1px);
+    background-size: 35px 35px;
+    mask-image: linear-gradient(to bottom, black, transparent 80%);
 }
 
-.orb-one {
-
-    background: #8b5cf6;
-
-    top: 5%;
-    left: -100px;
+.container {
+    width: min(1180px, calc(100% - 32px));
+    margin: auto;
 }
 
-.orb-two {
-
-    background: #06b6d4;
-
-    bottom: 5%;
-    right: -100px;
-
-    animation-delay: -4s;
-}
-
-@keyframes floatOrb {
-
-    0%,100% {
-        transform: translate(0,0);
-    }
-
-    50% {
-        transform: translate(40px,-30px);
-    }
-}
-
-
-/* =========================================================
-   NAVBAR
-========================================================= */
+/* ---------------- NAVBAR ---------------- */
 
 .navbar {
-
-    width: 100%;
-
-    padding: 22px 6%;
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: space-between;
-
-    border-bottom: 1px solid var(--border);
-
-    background: rgba(7,11,20,0.65);
-
-    backdrop-filter: blur(20px);
-
     position: sticky;
-
     top: 0;
-
     z-index: 100;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface-solid) 70%, transparent);
+}
+
+.nav-inner {
+    min-height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 800;
+    letter-spacing: -.5px;
 }
 
 .logo {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 12px;
-
-    font-family: "Outfit";
-
-    font-weight: 800;
-
-    font-size: 22px;
-}
-
-.logo-icon {
-
     width: 42px;
     height: 42px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 13px;
-
-    background:
-        linear-gradient(
-            135deg,
-            var(--primary),
-            var(--primary-2)
-        );
-
-    box-shadow:
-        0 8px 30px rgba(139,92,246,0.35);
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    color: white;
+    font-size: 19px;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    box-shadow: 0 10px 28px rgba(99,91,255,.32);
 }
 
-.logo span {
+.brand-text span {
+    display: block;
+    font-size: 15px;
+}
 
-    background:
-        linear-gradient(
-            90deg,
-            #fff,
-            #c4b5fd
-        );
-
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+.brand-text small {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-top: 2px;
 }
 
 .nav-actions {
-
     display: flex;
-
     align-items: center;
-
-    gap: 10px;
+    gap: 9px;
 }
 
-
-/* =========================================================
-   THEME BUTTONS
-========================================================= */
-
-.theme-selector {
-
-    display: flex;
-
-    gap: 6px;
-
-    padding: 5px;
-
-    background: rgba(255,255,255,0.05);
-
+.icon-btn {
+    width: 43px;
+    height: 43px;
     border: 1px solid var(--border);
-
-    border-radius: 12px;
-}
-
-.theme-btn {
-
-    width: 34px;
-    height: 30px;
-
-    border: none;
-
-    border-radius: 8px;
-
+    border-radius: 13px;
+    background: var(--surface);
+    color: var(--text);
     cursor: pointer;
-
-    transition: 0.25s;
-
-    color: white;
-
-    font-size: 12px;
+    font-size: 17px;
+    transition: .2s ease;
 }
 
-.theme-btn:hover {
+.icon-btn:hover {
     transform: translateY(-2px);
+    border-color: rgba(99,91,255,.35);
+    box-shadow: var(--soft-shadow);
 }
 
-.theme-purple {
-    background: linear-gradient(135deg,#8b5cf6,#6366f1);
-}
-
-.theme-ocean {
-    background: linear-gradient(135deg,#06b6d4,#2563eb);
-}
-
-.theme-emerald {
-    background: linear-gradient(135deg,#10b981,#059669);
-}
-
-.theme-sunset {
-    background: linear-gradient(135deg,#f97316,#ec4899);
-}
-
-
-/* =========================================================
-   HERO
-========================================================= */
+/* ---------------- HERO ---------------- */
 
 .hero {
-
-    width: min(1150px, 92%);
-
-    margin: 75px auto 40px;
-
+    padding: 72px 0 34px;
     text-align: center;
 }
 
 .badge {
-
     display: inline-flex;
-
     align-items: center;
-
     gap: 8px;
-
-    padding: 8px 15px;
-
-    border: 1px solid rgba(139,92,246,0.25);
-
-    border-radius: 100px;
-
-    background: rgba(139,92,246,0.08);
-
-    color: #c4b5fd;
-
-    font-size: 13px;
-
-    font-weight: 600;
-
-    margin-bottom: 22px;
+    padding: 8px 13px;
+    border: 1px solid rgba(99,91,255,.18);
+    border-radius: 999px;
+    color: var(--primary);
+    background: rgba(99,91,255,.08);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .8px;
+    text-transform: uppercase;
 }
 
-.badge i {
-    color: #a78bfa;
+.pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--positive);
+    box-shadow: 0 0 0 5px rgba(16,185,129,.10);
 }
 
 .hero h1 {
-
-    font-family: "Outfit";
-
-    font-size: clamp(42px, 6vw, 72px);
-
-    line-height: 1.05;
-
-    letter-spacing: -2px;
-
-    font-weight: 800;
-
-    margin-bottom: 20px;
+    margin-top: 22px;
+    font-size: clamp(42px, 7vw, 76px);
+    line-height: .98;
+    letter-spacing: -4px;
+    font-weight: 900;
 }
 
 .gradient-text {
-
-    background:
-        linear-gradient(
-            90deg,
-            #a78bfa,
-            #60a5fa,
-            #22d3ee
-        );
-
+    background: linear-gradient(120deg, var(--primary), var(--primary-2), #ec4899);
     -webkit-background-clip: text;
-
-    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    color: transparent;
 }
 
 .hero p {
-
     max-width: 650px;
-
-    margin: auto;
-
+    margin: 22px auto 0;
     color: var(--muted);
-
-    font-size: 17px;
-
-    line-height: 1.7;
-}
-
-
-/* =========================================================
-   MAIN CARD
-========================================================= */
-
-.container {
-
-    width: min(1000px, 92%);
-
-    margin: 0 auto 80px;
-}
-
-.main-card {
-
-    position: relative;
-
-    background: var(--card);
-
-    border: 1px solid var(--border);
-
-    border-radius: 28px;
-
-    padding: 32px;
-
-    backdrop-filter: blur(25px);
-
-    box-shadow: var(--shadow);
-
-    overflow: hidden;
-}
-
-.main-card::before {
-
-    content: "";
-
-    position: absolute;
-
-    width: 300px;
-    height: 300px;
-
-    border-radius: 50%;
-
-    background: var(--primary);
-
-    filter: blur(120px);
-
-    opacity: 0.06;
-
-    top: -160px;
-    right: -100px;
-}
-
-
-/* =========================================================
-   CARD HEADER
-========================================================= */
-
-.card-header {
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: space-between;
-
-    gap: 20px;
-
-    margin-bottom: 25px;
-}
-
-.card-title {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 13px;
-}
-
-.card-title-icon {
-
-    width: 45px;
-    height: 45px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 14px;
-
-    background:
-        rgba(139,92,246,0.12);
-
-    color: #a78bfa;
-}
-
-.card-title h2 {
-
-    font-family: "Outfit";
-
-    font-size: 20px;
-}
-
-.card-title p {
-
-    color: var(--muted);
-
-    font-size: 13px;
-
-    margin-top: 3px;
-}
-
-.status {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 7px;
-
-    padding: 7px 12px;
-
-    border-radius: 100px;
-
-    background: rgba(34,197,94,0.08);
-
-    border: 1px solid rgba(34,197,94,0.15);
-
-    color: #86efac;
-
-    font-size: 12px;
-
-    font-weight: 600;
-}
-
-.status-dot {
-
-    width: 7px;
-    height: 7px;
-
-    border-radius: 50%;
-
-    background: #22c55e;
-
-    box-shadow: 0 0 10px #22c55e;
-
-    animation: pulse 1.8s infinite;
-}
-
-@keyframes pulse {
-
-    0%,100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: .4;
-    }
-}
-
-
-/* =========================================================
-   TEXT AREA
-========================================================= */
-
-.input-wrapper {
-
-    position: relative;
-}
-
-textarea {
-
-    width: 100%;
-
-    min-height: 190px;
-
-    resize: vertical;
-
-    border: 1px solid var(--border);
-
-    border-radius: 20px;
-
-    background: rgba(0,0,0,0.2);
-
-    color: var(--text);
-
-    padding: 22px;
-
-    font-family: "DM Sans";
-
     font-size: 16px;
-
     line-height: 1.7;
-
-    outline: none;
-
-    transition: 0.3s;
 }
 
-textarea::placeholder {
-    color: #64748b;
+/* ---------------- DASHBOARD ---------------- */
+
+.dashboard {
+    display: grid;
+    grid-template-columns: 1.35fr .85fr;
+    gap: 22px;
+    margin: 28px 0 65px;
 }
 
-textarea:focus {
+.card {
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    background: var(--surface);
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+    box-shadow: var(--shadow);
+}
 
-    border-color: rgba(139,92,246,0.6);
+.input-card {
+    padding: 28px;
+}
 
-    box-shadow:
-        0 0 0 4px rgba(139,92,246,0.08);
+.card-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 18px;
+}
+
+.card-heading h2 {
+    font-size: 20px;
+    letter-spacing: -.5px;
+}
+
+.card-heading p {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 13px;
 }
 
 .counter {
-
-    position: absolute;
-
-    bottom: 14px;
-    right: 17px;
-
-    color: #64748b;
-
-    font-size: 12px;
-}
-
-
-/* =========================================================
-   SAMPLE TEXT
-========================================================= */
-
-.samples {
-
-    display: flex;
-
-    flex-wrap: wrap;
-
-    gap: 8px;
-
-    margin-top: 15px;
-}
-
-.sample {
-
-    border: 1px solid var(--border);
-
-    background: rgba(255,255,255,0.03);
-
-    color: #cbd5e1;
-
-    border-radius: 10px;
-
-    padding: 8px 12px;
-
-    font-size: 12px;
-
-    cursor: pointer;
-
-    transition: .25s;
-}
-
-.sample:hover {
-
-    border-color: rgba(139,92,246,.4);
-
-    background: rgba(139,92,246,.08);
-
-    transform: translateY(-1px);
-}
-
-
-/* =========================================================
-   BUTTON
-========================================================= */
-
-.analyze-btn {
-
-    width: 100%;
-
-    margin-top: 22px;
-
-    border: none;
-
-    border-radius: 16px;
-
-    padding: 17px;
-
-    font-size: 15px;
-
-    font-weight: 700;
-
-    color: white;
-
-    cursor: pointer;
-
-    font-family: "DM Sans";
-
-    background:
-        linear-gradient(
-            135deg,
-            var(--primary),
-            var(--primary-2)
-        );
-
-    box-shadow:
-        0 12px 35px rgba(99,102,241,0.25);
-
-    transition: .3s;
-
-    position: relative;
-
-    overflow: hidden;
-}
-
-.analyze-btn:hover {
-
-    transform: translateY(-3px);
-
-    box-shadow:
-        0 18px 45px rgba(99,102,241,0.38);
-}
-
-.analyze-btn:active {
-    transform: scale(.99);
-}
-
-.analyze-btn i {
-    margin-right: 8px;
-}
-
-
-/* =========================================================
-   ERROR
-========================================================= */
-
-.error {
-
-    margin-top: 20px;
-
-    padding: 15px 17px;
-
-    border-radius: 14px;
-
-    background: rgba(239,68,68,0.08);
-
-    border: 1px solid rgba(239,68,68,0.2);
-
-    color: #fca5a5;
-
-    font-size: 14px;
-}
-
-
-/* =========================================================
-   RESULT
-========================================================= */
-
-.result {
-
-    margin-top: 28px;
-
-    border-radius: 22px;
-
-    border: 1px solid var(--border);
-
-    padding: 25px;
-
-    background: rgba(255,255,255,0.025);
-
-    animation: resultIn .5s ease;
-}
-
-@keyframes resultIn {
-
-    from {
-        opacity: 0;
-        transform: translateY(15px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.result-header {
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: space-between;
-
-    margin-bottom: 20px;
-}
-
-.result-label {
-
     color: var(--muted);
-
     font-size: 12px;
-
-    text-transform: uppercase;
-
-    letter-spacing: 1px;
-}
-
-.sentiment-box {
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 17px;
-}
-
-.sentiment-icon {
-
-    width: 64px;
-    height: 64px;
-
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    border-radius: 20px;
-
-    font-size: 29px;
-}
-
-.sentiment-icon.positive {
-
-    background: rgba(34,197,94,0.1);
-
-    border: 1px solid rgba(34,197,94,0.2);
-}
-
-.sentiment-icon.negative {
-
-    background: rgba(239,68,68,0.1);
-
-    border: 1px solid rgba(239,68,68,0.2);
-}
-
-.sentiment-icon.neutral {
-
-    background: rgba(245,158,11,0.1);
-
-    border: 1px solid rgba(245,158,11,0.2);
-}
-
-.sentiment-name {
-
-    font-family: "Outfit";
-
-    font-size: 27px;
-
-    font-weight: 800;
-}
-
-.sentiment-name.positive {
-    color: #4ade80;
-}
-
-.sentiment-name.negative {
-    color: #f87171;
-}
-
-.sentiment-name.neutral {
-    color: #fbbf24;
-}
-
-.description {
-
-    color: var(--muted);
-
-    margin-top: 4px;
-
-    font-size: 13px;
-}
-
-
-/* =========================================================
-   CONFIDENCE
-========================================================= */
-
-.confidence {
-
-    margin-top: 25px;
-}
-
-.confidence-top {
-
-    display: flex;
-
-    justify-content: space-between;
-
-    color: var(--muted);
-
-    font-size: 13px;
-
-    margin-bottom: 9px;
-}
-
-.confidence-value {
-
-    color: white;
-
-    font-weight: 700;
-}
-
-.progress {
-
-    height: 9px;
-
-    background: rgba(255,255,255,.07);
-
-    border-radius: 100px;
-
-    overflow: hidden;
-}
-
-.progress-bar {
-
-    height: 100%;
-
-    border-radius: inherit;
-
-    background:
-        linear-gradient(
-            90deg,
-            var(--primary),
-            #22d3ee
-        );
-
-    width: {{ confidence or 0 }}%;
-
-    transition: width 1s ease;
-}
-
-
-/* =========================================================
-   INFO CARDS
-========================================================= */
-
-.info-grid {
-
-    display: grid;
-
-    grid-template-columns:
-        repeat(3, 1fr);
-
-    gap: 14px;
-
-    margin-top: 18px;
-}
-
-.info-card {
-
-    padding: 18px;
-
-    border-radius: 17px;
-
-    border: 1px solid var(--border);
-
-    background: rgba(255,255,255,.025);
-}
-
-.info-card i {
-
-    color: #a78bfa;
-
-    margin-bottom: 12px;
-
-    font-size: 18px;
-}
-
-.info-card h3 {
-
-    font-family: "Outfit";
-
-    font-size: 14px;
-
-    margin-bottom: 4px;
-}
-
-.info-card p {
-
-    color: var(--muted);
-
-    font-size: 12px;
-
-    line-height: 1.5;
-}
-
-
-/* =========================================================
-   FOOTER
-========================================================= */
-
-footer {
-
-    text-align: center;
-
-    padding: 30px;
-
-    color: #64748b;
-
-    font-size: 12px;
-}
-
-footer span {
-    color: #a78bfa;
-}
-
-
-/* =========================================================
-   RESPONSIVE
-========================================================= */
-
-@media(max-width:700px) {
-
-    .navbar {
-        padding: 18px 4%;
-    }
-
-    .hero {
-        margin-top: 50px;
-    }
-
-    .hero h1 {
-        letter-spacing: -1px;
-    }
-
-    .main-card {
-        padding: 20px;
-
-        border-radius: 22px;
-    }
-
-    .card-header {
-        align-items: flex-start;
-    }
-
-    .status {
-        display: none;
-    }
-
-    .info-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .theme-selector {
-        gap: 3px;
-    }
-
-    .theme-btn {
-        width: 30px;
-    }
-}
-
-
-/* ============================================================
-   PROFESSIONAL UI REFINEMENTS
-   ============================================================ */
-
-:root {
-    --bg: #f5f7fb;
-    --card: rgba(255, 255, 255, 0.94);
-    --card-solid: #ffffff;
-    --text: #172033;
-    --muted: #64748b;
-    --border: rgba(15, 23, 42, 0.10);
-    --shadow: 0 20px 60px rgba(15, 23, 42, 0.10);
-}
-
-body {
-    background:
-        radial-gradient(circle at 8% 8%, rgba(99,102,241,0.10), transparent 28%),
-        radial-gradient(circle at 92% 18%, rgba(6,182,212,0.08), transparent 28%),
-        var(--bg);
-    color: var(--text);
-}
-
-.navbar {
-    background: rgba(255,255,255,0.88);
-    border-bottom: 1px solid rgba(15,23,42,0.08);
-    box-shadow: 0 4px 24px rgba(15,23,42,0.04);
-}
-
-.hero {
-    margin-top: 65px;
-}
-
-.hero h1 {
-    color: #172033;
-    text-shadow: none;
-}
-
-.hero p {
-    color: #64748b;
-}
-
-.main-card {
-    background: rgba(255,255,255,0.96);
-    border: 1px solid rgba(15,23,42,0.08);
-    box-shadow: 0 24px 70px rgba(15,23,42,0.10);
+    white-space: nowrap;
 }
 
 textarea {
-    background: #f8fafc;
-    color: #172033;
-    border-color: rgba(15,23,42,0.10);
-}
-
-textarea::placeholder {
-    color: #94a3b8;
+    width: 100%;
+    min-height: 280px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    outline: none;
+    padding: 21px;
+    background: var(--surface-solid);
+    color: var(--text);
+    font: inherit;
+    line-height: 1.7;
+    font-size: 15px;
+    transition: .2s ease;
 }
 
 textarea:focus {
-    background: #ffffff;
+    border-color: rgba(99,91,255,.55);
+    box-shadow: 0 0 0 4px rgba(99,91,255,.10);
 }
 
-.sample,
-.info-card,
-.result {
-    background: #ffffff;
-    border-color: rgba(15,23,42,0.08);
+.quick-prompts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 14px 0 20px;
 }
 
-.sample {
-    color: #475569;
+.prompt {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: .2s;
 }
 
-.confidence-value {
-    color: #172033;
+.prompt:hover {
+    color: var(--primary);
+    border-color: rgba(99,91,255,.35);
+    transform: translateY(-1px);
 }
 
-.theme-selector {
-    background: rgba(15,23,42,0.04);
-    border-color: rgba(15,23,42,0.08);
+.analyze-btn {
+    width: 100%;
+    min-height: 55px;
+    border: 0;
+    border-radius: 16px;
+    color: white;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    box-shadow: 0 15px 30px rgba(99,91,255,.26);
+    transition: .2s ease;
 }
+
+.analyze-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 18px 38px rgba(99,91,255,.34);
+}
+
+.analyze-btn:active {
+    transform: translateY(0);
+}
+
+.analyze-btn.loading {
+    opacity: .72;
+    pointer-events: none;
+}
+
+/* ---------------- RESULT ---------------- */
+
+.result-card {
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+}
+
+.result-card::after {
+    content: "";
+    position: absolute;
+    width: 180px;
+    height: 180px;
+    right: -80px;
+    top: -80px;
+    border-radius: 50%;
+    background: rgba(99,91,255,.08);
+    filter: blur(8px);
+}
+
+.result-empty {
+    min-height: 470px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+}
+
+.empty-icon {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 17px;
+    display: grid;
+    place-items: center;
+    border-radius: 22px;
+    background: rgba(99,91,255,.09);
+    font-size: 30px;
+}
+
+.result-empty h3 {
+    font-size: 19px;
+}
+
+.result-empty p {
+    max-width: 260px;
+    margin: 9px auto;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.result-content {
+    display: none;
+}
+
+.sentiment-pill {
+    display: inline-flex;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+}
+
+.sentiment-positive {
+    background: rgba(16,185,129,.11);
+    color: var(--positive);
+}
+
+.sentiment-negative {
+    background: rgba(239,68,68,.11);
+    color: var(--negative);
+}
+
+.result-title {
+    margin: 22px 0 8px;
+    font-size: 38px;
+    letter-spacing: -1.5px;
+}
+
+.confidence-label {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.confidence {
+    margin-top: 8px;
+    font-size: 43px;
+    font-weight: 900;
+    letter-spacing: -2px;
+}
+
+.meter {
+    height: 10px;
+    margin: 17px 0 25px;
+    border-radius: 999px;
+    background: rgba(148,163,184,.16);
+    overflow: hidden;
+}
+
+.meter-fill {
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--primary), var(--primary-2));
+    transition: width 1s cubic-bezier(.2,.8,.2,1);
+}
+
+.breakdown {
+    display: grid;
+    gap: 15px;
+}
+
+.metric {
+    display: grid;
+    gap: 8px;
+}
+
+.metric-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+}
+
+.metric-top span:first-child {
+    color: var(--muted);
+}
+
+.mini-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148,163,184,.14);
+    overflow: hidden;
+}
+
+.mini-fill {
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    transition: width .8s ease;
+}
+
+.positive-fill {
+    background: var(--positive);
+}
+
+.negative-fill {
+    background: var(--negative);
+}
+
+.analyzed-box {
+    margin-top: 25px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 15px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+/* ---------------- FEATURES ---------------- */
+
+.features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 75px;
+}
+
+.feature {
+    padding: 22px;
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    background: var(--surface);
+    box-shadow: var(--soft-shadow);
+}
+
+.feature-icon {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    background: rgba(99,91,255,.09);
+    margin-bottom: 16px;
+}
+
+.feature h3 {
+    font-size: 15px;
+    margin-bottom: 6px;
+}
+
+.feature p {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+/* ---------------- FOOTER ---------------- */
 
 footer {
-    color: #64748b;
+    padding: 25px 0 40px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
 }
 
-/* Improve keyboard focus visibility for accessibility. */
-button:focus-visible,
-textarea:focus-visible {
-    outline: 3px solid rgba(99,102,241,0.22);
-    outline-offset: 2px;
+/* ---------------- TOAST ---------------- */
+
+.toast {
+    position: fixed;
+    left: 50%;
+    bottom: 25px;
+    transform: translate(-50%, 30px);
+    padding: 12px 17px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: var(--surface-solid);
+    box-shadow: var(--shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: .25s ease;
+    z-index: 500;
+    font-size: 13px;
 }
 
-/* Cleaner mobile presentation. */
-@media (max-width: 700px) {
-    .hero p {
-        font-size: 15px;
+.toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+/* ---------------- RESPONSIVE ---------------- */
+
+@media (max-width: 900px) {
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+
+    .features {
+        grid-template-columns: 1fr;
+    }
+
+    .result-empty {
+        min-height: 350px;
+    }
+}
+
+@media (max-width: 560px) {
+    .container {
+        width: min(100% - 20px, 1180px);
+    }
+
+    .hero {
+        padding-top: 50px;
     }
 
     .hero h1 {
-        font-size: clamp(38px, 12vw, 58px);
+        font-size: 48px;
+        letter-spacing: -2.5px;
+    }
+
+    .input-card,
+    .result-card {
+        padding: 20px;
+        border-radius: 22px;
+    }
+
+    textarea {
+        min-height: 230px;
+    }
+
+    .brand-text small {
+        display: none;
     }
 }
-
 </style>
-
 </head>
-
 
 <body>
 
-<div class="bg-orb orb-one"></div>
-<div class="bg-orb orb-two"></div>
-
-
-<!-- =====================================================
-     NAVBAR
-===================================================== -->
-
 <nav class="navbar">
-
-    <div class="logo">
-
-        <div class="logo-icon">
-            <i class="fa-solid fa-brain"></i>
+    <div class="container nav-inner">
+        <div class="brand">
+            <div class="logo">✦</div>
+            <div class="brand-text">
+                <span>Sentiment Analysis</span>
+                <small>AI Insight Dashboard</small>
+            </div>
         </div>
 
-        <span>Sentiment Analysis</span>
-
-    </div>
-
-
-    <div class="nav-actions">
-
-        <div class="theme-selector">
-
-            <button
-                class="theme-btn theme-purple"
-                onclick="setTheme('purple')"
-                title="Purple Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-ocean"
-                onclick="setTheme('ocean')"
-                title="Ocean Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-emerald"
-                onclick="setTheme('emerald')"
-                title="Emerald Theme">
-            </button>
-
-            <button
-                class="theme-btn theme-sunset"
-                onclick="setTheme('sunset')"
-                title="Sunset Theme">
-            </button>
-
+        <div class="nav-actions">
+            <button class="icon-btn" id="themeBtn" title="Toggle theme">☾</button>
         </div>
-
     </div>
-
 </nav>
-
-
-<!-- =====================================================
-     HERO
-===================================================== -->
-
-<section class="hero">
-
-    <div class="badge">
-
-        <i class="fa-solid fa-sparkles"></i>
-
-        AI-POWERED SENTIMENT INTELLIGENCE
-
-    </div>
-
-    <h1>
-        <span class="gradient-text">
-            Sentiment Analysis
-        </span>
-    </h1>
-
-    <p>
-
-        Analyze text with a machine learning powered sentiment classifier.
-        Get a clear positive, negative, or neutral prediction with confidence.
-
-    </p>
-
-</section>
-
-
-<!-- =====================================================
-     MAIN
-===================================================== -->
 
 <main class="container">
 
-    <div class="main-card">
-
-
-        <!-- HEADER -->
-
-        <div class="card-header">
-
-            <div class="card-title">
-
-                <div class="card-title-icon">
-
-                    <i class="fa-solid fa-message"></i>
-
-                </div>
-
-                <div>
-
-                    <h2>Sentiment Analyzer</h2>
-
-                    <p>
-                        Enter your text and let the AI analyze it.
-                    </p>
-
-                </div>
-
-            </div>
-
-
-            {% if model_status %}
-
-            <div class="status">
-
-                <span class="status-dot"></span>
-
-                Model Online
-
-            </div>
-
-            {% endif %}
-
+    <section class="hero">
+        <div class="badge">
+            <span class="pulse"></span>
+            AI-Powered Text Intelligence
         </div>
 
+        <h1>
+            Understand the <span class="gradient-text">feeling</span><br>
+            behind every word.
+        </h1>
 
-        <!-- FORM -->
+        <p>
+            Paste any sentence, review, feedback or message and get an instant
+            sentiment prediction powered by your trained machine-learning model.
+        </p>
+    </section>
 
-        <form method="POST" id="sentimentForm">
+    <section class="dashboard">
 
-            <div class="input-wrapper">
-
-                <textarea
-                    id="textInput"
-                    name="text"
-                    maxlength="5000"
-                    placeholder="Type or paste your text here...
-
-Example:
-I absolutely loved this product. The quality is amazing!"
-                >{{ text }}</textarea>
-
-                <div class="counter">
-
-                    <span id="charCount">0</span>/5000
-
+        <div class="card input-card">
+            <div class="card-heading">
+                <div>
+                    <h2>Analyze your text</h2>
+                    <p>Enter text below and let the model evaluate its sentiment.</p>
                 </div>
-
+                <div class="counter" id="counter">0 characters</div>
             </div>
 
+            <textarea id="textInput"
+                placeholder="Example: I absolutely love this product. The quality is amazing and the service was excellent!"></textarea>
 
-            <!-- SAMPLE BUTTONS -->
-
-            <div class="samples">
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('I absolutely loved this product! The quality is amazing.')">
-
-                    😊 Positive Example
-
+            <div class="quick-prompts">
+                <button class="prompt" data-text="I absolutely love this product. The quality is amazing!">
+                    ✨ Positive example
                 </button>
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('This is the worst experience I have ever had.')">
-
-                    😞 Negative Example
-
+                <button class="prompt" data-text="This experience was terrible and I am very disappointed.">
+                    ⚠ Negative example
                 </button>
-
-                <button
-                    type="button"
-                    class="sample"
-                    onclick="useSample('The product arrived today.')">
-
-                    😐 Neutral Example
-
+                <button class="prompt" data-text="The product arrived today and it works as expected.">
+                    ◉ Neutral-style example
                 </button>
-
             </div>
 
-
-            <button class="analyze-btn" type="submit">
-
-                <i class="fa-solid fa-wand-magic-sparkles"></i>
-
-                Analyze Sentiment
-
+            <button class="analyze-btn" id="analyzeBtn">
+                Analyze Sentiment <span>→</span>
             </button>
-
-        </form>
-
-
-        <!-- ERROR -->
-
-        {% if error %}
-
-        <div class="error">
-
-            <i class="fa-solid fa-circle-exclamation"></i>
-
-            &nbsp; {{ error }}
-
         </div>
 
-        {% endif %}
+        <div class="card result-card">
 
-
-        <!-- RESULT -->
-
-        {% if result %}
-
-        <div class="result">
-
-            <div class="result-header">
-
-                <span class="result-label">
-                    Analysis Result
-                </span>
-
-                <i class="fa-solid fa-chart-simple"></i>
-
-            </div>
-
-
-            <div class="sentiment-box">
-
-                <div class="sentiment-icon {{ result.class }}">
-
-                    {{ result.emoji }}
-
-                </div>
-
+            <div class="result-empty" id="emptyState">
                 <div>
+                    <div class="empty-icon">◎</div>
+                    <h3>Your result will appear here</h3>
+                    <p>
+                        Submit a sentence to see the predicted sentiment,
+                        confidence score and probability breakdown.
+                    </p>
+                </div>
+            </div>
 
-                    <div class="sentiment-name {{ result.class }}">
+            <div class="result-content" id="resultContent">
+                <span class="sentiment-pill" id="sentimentPill">Positive</span>
 
-                        {{ result.label }}
+                <h2 class="result-title" id="sentimentTitle">Positive</h2>
 
+                <div class="confidence-label">Model confidence</div>
+                <div class="confidence" id="confidence">0%</div>
+
+                <div class="meter">
+                    <div class="meter-fill" id="confidenceFill"></div>
+                </div>
+
+                <div class="breakdown">
+                    <div class="metric">
+                        <div class="metric-top">
+                            <span>Positive probability</span>
+                            <strong id="positiveValue">0%</strong>
+                        </div>
+                        <div class="mini-bar">
+                            <div class="mini-fill positive-fill" id="positiveFill"></div>
+                        </div>
                     </div>
 
-                    <div class="description">
-
-                        {{ result.description }}
-
+                    <div class="metric">
+                        <div class="metric-top">
+                            <span>Negative probability</span>
+                            <strong id="negativeValue">0%</strong>
+                        </div>
+                        <div class="mini-bar">
+                            <div class="mini-fill negative-fill" id="negativeFill"></div>
+                        </div>
                     </div>
-
                 </div>
 
-            </div>
-
-
-            {% if confidence is not none %}
-
-            <div class="confidence">
-
-                <div class="confidence-top">
-
-                    <span>
-                        Model Confidence
-                    </span>
-
-                    <span class="confidence-value">
-
-                        {{ confidence }}%
-
-                    </span>
-
+                <div class="analyzed-box">
+                    <strong>Analyzed text</strong><br>
+                    <span id="analyzedText"></span>
                 </div>
-
-                <div class="progress">
-
-                    <div class="progress-bar"></div>
-
-                </div>
-
-            </div>
-
-            {% endif %}
-
-        </div>
-
-        {% endif %}
-
-
-        <!-- INFORMATION -->
-
-        <div class="info-grid">
-
-            <div class="info-card">
-
-                <i class="fa-solid fa-brain"></i>
-
-                <h3>Machine Learning</h3>
-
-                <p>
-                    Powered by a trained Naive Bayes
-                    classification model.
-                </p>
-
-            </div>
-
-
-            <div class="info-card">
-
-                <i class="fa-solid fa-chart-line"></i>
-
-                <h3>TF-IDF Analysis</h3>
-
-                <p>
-                    Text is transformed into numerical
-                    features using TF-IDF.
-                </p>
-
-            </div>
-
-
-            <div class="info-card">
-
-                <i class="fa-solid fa-bolt"></i>
-
-                <h3>Instant Results</h3>
-
-                <p>
-                    Get sentiment predictions within
-                    milliseconds.
-                </p>
-
             </div>
 
         </div>
 
+    </section>
 
-    </div>
+    <section class="features">
+        <div class="feature">
+            <div class="feature-icon">⚡</div>
+            <h3>Instant Prediction</h3>
+            <p>Fast sentiment classification using your trained Naive Bayes model.</p>
+        </div>
+
+        <div class="feature">
+            <div class="feature-icon">◈</div>
+            <h3>TF-IDF Intelligence</h3>
+            <p>Your uploaded TF-IDF vectorizer converts text into machine-learning features.</p>
+        </div>
+
+        <div class="feature">
+            <div class="feature-icon">◐</div>
+            <h3>Premium Interface</h3>
+            <p>Responsive glassmorphism dashboard with light and dark presentation modes.</p>
+        </div>
+    </section>
 
 </main>
 
-
 <footer>
-
-    Built with <span>Flask</span> •
-    Machine Learning •
-    Sentiment Analysis
-
+    Sentiment Analysis Dashboard · Flask + TF-IDF + Multinomial Naive Bayes
 </footer>
 
+<div class="toast" id="toast"></div>
 
 <script>
-
-/* =========================================================
-   CHARACTER COUNTER
-========================================================= */
-
 const textInput = document.getElementById("textInput");
-const charCount = document.getElementById("charCount");
+const counter = document.getElementById("counter");
+const analyzeBtn = document.getElementById("analyzeBtn");
+const themeBtn = document.getElementById("themeBtn");
+const emptyState = document.getElementById("emptyState");
+const resultContent = document.getElementById("resultContent");
+const toast = document.getElementById("toast");
 
 function updateCounter() {
-
-    charCount.textContent =
-        textInput.value.length;
-
+    counter.textContent = `${textInput.value.length} characters`;
 }
 
-textInput.addEventListener(
-    "input",
-    updateCounter
-);
-
+textInput.addEventListener("input", updateCounter);
 updateCounter();
 
+document.querySelectorAll(".prompt").forEach(button => {
+    button.addEventListener("click", () => {
+        textInput.value = button.dataset.text;
+        updateCounter();
+        textInput.focus();
+    });
+});
 
-/* =========================================================
-   SAMPLE TEXT
-========================================================= */
-
-function useSample(text) {
-
-    textInput.value = text;
-
-    updateCounter();
-
-    textInput.focus();
-
+function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add("show");
+    setTimeout(() => toast.classList.remove("show"), 2200);
 }
-
-
-/* =========================================================
-   PREMIUM THEMES
-========================================================= */
-
-const themes = {
-
-    purple: {
-
-        primary: "#8b5cf6",
-        primary2: "#6366f1"
-
-    },
-
-    ocean: {
-
-        primary: "#06b6d4",
-        primary2: "#2563eb"
-
-    },
-
-    emerald: {
-
-        primary: "#10b981",
-        primary2: "#059669"
-
-    },
-
-    sunset: {
-
-        primary: "#f97316",
-        primary2: "#ec4899"
-
-    }
-
-};
-
 
 function setTheme(theme) {
-
-    const selected = themes[theme];
-
-    document.documentElement.style.setProperty(
-        "--primary",
-        selected.primary
-    );
-
-    document.documentElement.style.setProperty(
-        "--primary-2",
-        selected.primary2
-    );
-
-    localStorage.setItem(
-        "sentixTheme",
-        theme
-    );
-
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("sentiment-theme", theme);
+    themeBtn.textContent = theme === "dark" ? "☀" : "☾";
 }
 
+const savedTheme = localStorage.getItem("sentiment-theme");
+setTheme(savedTheme || "light");
 
-/* =========================================================
-   LOAD SAVED THEME
-========================================================= */
+themeBtn.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme");
+    setTheme(current === "dark" ? "light" : "dark");
+});
 
-const savedTheme =
-    localStorage.getItem("sentixTheme");
-
-if (savedTheme && themes[savedTheme]) {
-
-    setTheme(savedTheme);
-
-}
-
-
-/* =========================================================
-   FORM LOADING
-========================================================= */
-
-document
-    .getElementById("sentimentForm")
-    .addEventListener("submit", function() {
-
-        const button =
-            this.querySelector(".analyze-btn");
-
-        button.innerHTML =
-            '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
-
-        button.style.pointerEvents = "none";
-
+function animateWidth(element, value) {
+    element.style.width = "0%";
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            element.style.width = `${value}%`;
+        });
     });
+}
 
+async function analyze() {
+    const text = textInput.value.trim();
 
-/* =========================================================
-   KEYBOARD SHORTCUT
-   Ctrl + Enter = Analyze
-========================================================= */
+    if (!text) {
+        showToast("Please enter some text first.");
+        textInput.focus();
+        return;
+    }
 
-textInput.addEventListener(
-    "keydown",
-    function(event) {
+    analyzeBtn.classList.add("loading");
+    analyzeBtn.innerHTML = "Analyzing <span>•••</span>";
 
-        if (
-            event.ctrlKey &&
-            event.key === "Enter"
-        ) {
+    try {
+        const response = await fetch("/predict", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ text })
+        });
 
-            document
-                .getElementById("sentimentForm")
-                .submit();
+        const data = await response.json();
 
+        if (!response.ok) {
+            throw new Error(data.error || "Prediction failed.");
         }
 
-    }
-);
+        emptyState.style.display = "none";
+        resultContent.style.display = "block";
 
+        const isPositive = data.sentiment.toLowerCase() === "positive";
+
+        const pill = document.getElementById("sentimentPill");
+        pill.textContent = data.sentiment;
+        pill.className = "sentiment-pill " +
+            (isPositive ? "sentiment-positive" : "sentiment-negative");
+
+        document.getElementById("sentimentTitle").textContent = data.sentiment;
+        document.getElementById("confidence").textContent = `${data.confidence}%`;
+        document.getElementById("positiveValue").textContent = `${data.positive}%`;
+        document.getElementById("negativeValue").textContent = `${data.negative}%`;
+        document.getElementById("analyzedText").textContent = text;
+
+        animateWidth(document.getElementById("confidenceFill"), data.confidence);
+        animateWidth(document.getElementById("positiveFill"), data.positive);
+        animateWidth(document.getElementById("negativeFill"), data.negative);
+
+        showToast(`${data.sentiment} sentiment detected.`);
+    } catch (error) {
+        showToast(error.message);
+    } finally {
+        analyzeBtn.classList.remove("loading");
+        analyzeBtn.innerHTML = "Analyze Sentiment <span>→</span>";
+    }
+}
+
+analyzeBtn.addEventListener("click", analyze);
+
+textInput.addEventListener("keydown", event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        analyze();
+    }
+});
 </script>
 
-
 </body>
-
 </html>
 """
 
 
-# ============================================================
-# RUN APPLICATION
-# ============================================================
+@app.route("/", methods=["GET"])
+def home():
+    return render_template_string(HTML)
+
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    try:
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+
+        if not isinstance(text, str) or not text.strip():
+            return jsonify({"error": "Please enter valid text."}), 400
+
+        result = analyze_sentiment(text)
+        return jsonify(result)
+
+    except Exception as exc:
+        return jsonify({
+            "error": f"Prediction error: {str(exc)}"
+        }), 500
+
 
 if __name__ == "__main__":
-
-    print("=" * 60)
-    print("        SENTIX AI - SENTIMENT ANALYSIS")
-    print("=" * 60)
-
-    if MODEL_STATUS:
-        print("✓ Model loaded successfully")
-        print("✓ TF-IDF Vectorizer loaded successfully")
-    else:
-        print("✗ Model loading failed")
-        print(MODEL_ERROR)
-
-    print("=" * 60)
-    print("Running at: http://127.0.0.1:5000")
-    print("=" * 60)
-
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True
-    )
+    app.run(host="0.0.0.0", port=5000, debug=True)

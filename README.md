@@ -145,7 +145,7 @@ Open the local URL printed in your terminal (commonly `http://127.0.0.1:5000/`).
 ## 👨‍💻 Developer
 
 **Yash Chaudhari**  
-Aspiring Data Scientist | Data Analyst | Machine Learning & NLP Enthusiast
+Aspiring Data Scientist | Data Analyst | Machine Learning & NLP Enthusiast.
 
 - **GitHub:** [yashchaudhari372-lab](https://github.com/yashchaudhari372-lab)
 - **LinkedIn:** [yashchaudhari08](https://www.linkedin.com/in/yashchaudhari08/)

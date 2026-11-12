@@ -15,7 +15,7 @@
 
 Sentiment Analysis is a Natural Language Processing (NLP) project that analyzes written text and predicts its sentiment using a trained machine learning model. It demonstrates an end-to-end workflow: preparing text, converting it into numerical features, making predictions, and serving those predictions through a Flask web application.
 
-The project can illustrate how organizations extract useful insights from customer reviews, feedback, and other text-based interactions..
+The project can illustrate how organizations extract useful insights from customer reviews, feedback, and other text-based interactions.
 
 ## ✨ Key Features
 
